@@ -18,6 +18,7 @@ import com.peaceantz.stagescope.ui.analyzer.AnalyzerDetailsScreen
 import com.peaceantz.stagescope.ui.analyzer.AnalyzerScreen
 import com.peaceantz.stagescope.ui.analyzer.AnalyzerViewModel
 import com.peaceantz.stagescope.ui.analyzer.SnapshotManagerScreen
+import com.peaceantz.stagescope.ui.components.RotatedContent
 import com.peaceantz.stagescope.ui.components.rememberAudioPermissionRequester
 import com.peaceantz.stagescope.ui.help.WatchShortcutsHelpScreen
 import com.peaceantz.stagescope.ui.main.CaptureSessionViewModel
@@ -25,6 +26,7 @@ import com.peaceantz.stagescope.ui.ring.RingCapturesScreen
 import com.peaceantz.stagescope.ui.ring.RingDetailsScreen
 import com.peaceantz.stagescope.ui.ring.RingScreen
 import com.peaceantz.stagescope.ui.ring.RingViewModel
+import com.peaceantz.stagescope.ui.rotation.OrientationViewModel
 import com.peaceantz.stagescope.ui.settings.AppearanceScreen
 import com.peaceantz.stagescope.ui.settings.CalibrationScreen
 import com.peaceantz.stagescope.ui.settings.CalibrationViewModel
@@ -81,6 +83,11 @@ fun StageScopeNavHost(
             val ringViewModel: RingViewModel = viewModel(viewModelStoreOwner = backStackEntry) {
                 RingViewModel(container, session)
             }
+            val orientationViewModel: OrientationViewModel = viewModel(viewModelStoreOwner = backStackEntry) {
+                OrientationViewModel(container)
+            }
+            val angleDegrees by orientationViewModel.angleDegrees.collectAsStateWithLifecycle()
+            val orientationLocked by orientationViewModel.locked.collectAsStateWithLifecycle()
 
             val compareId by backStackEntry.savedStateHandle
                 .getStateFlow<String?>(KEY_COMPARE_SNAPSHOT_ID, null)
@@ -105,7 +112,8 @@ fun StageScopeNavHost(
                     HorizontalPager(
                         state = pagerState,
                         flingBehavior = PagerScaffoldDefaults.snapWithSpringFlingBehavior(state = pagerState),
-                        // Crown is repurposed per-page (spectrum cursor / ring history); never page via rotary.
+                        // Crown now drives the shared instrument rotation on each page instead of
+                        // paging -- see AnalyzerScreen/RingScreen's own onRotaryScrollEvent wiring.
                         rotaryScrollableBehavior = null,
                     ) { page ->
                         AnimatedPage(pageIndex = page, pagerState = pagerState) {
@@ -113,10 +121,16 @@ fun StageScopeNavHost(
                                 ModePage.ANALYZER -> AnalyzerScreen(
                                     viewModel = analyzerViewModel,
                                     compareSnapshotId = compareId,
+                                    angleDegrees = angleDegrees,
+                                    orientationLocked = orientationLocked,
+                                    onRotaryDelta = orientationViewModel::onRotaryDelta,
                                     onOpenDetails = { navController.navigate(ROUTE_ANALYZER_DETAILS) },
                                 )
                                 ModePage.RING -> RingScreen(
                                     viewModel = ringViewModel,
+                                    angleDegrees = angleDegrees,
+                                    orientationLocked = orientationLocked,
+                                    onRotaryDelta = orientationViewModel::onRotaryDelta,
                                     onOpenDetails = { navController.navigate(ROUTE_RING_DETAILS) },
                                     onOpenCaptures = { navController.navigate(ROUTE_RING_CAPTURES) },
                                 )
@@ -135,24 +149,38 @@ fun StageScopeNavHost(
             val analyzerViewModel: AnalyzerViewModel = viewModel(viewModelStoreOwner = mainEntry) {
                 AnalyzerViewModel(container, sessionViewModel.session)
             }
-            AnalyzerDetailsScreen(
-                container = container,
-                viewModel = analyzerViewModel,
-                onOpenCalibration = { navController.navigate(ROUTE_CALIBRATION) },
-                onOpenSnapshots = { navController.navigate(ROUTE_SNAPSHOTS) },
-                onOpenAppearance = { navController.navigate(ROUTE_APPEARANCE) },
-                onOpenWatchShortcuts = { navController.navigate(ROUTE_WATCH_SHORTCUTS_HELP) },
-            )
+            val orientationViewModel: OrientationViewModel = viewModel(viewModelStoreOwner = mainEntry) {
+                OrientationViewModel(container)
+            }
+            val angleDegrees by orientationViewModel.angleDegrees.collectAsStateWithLifecycle()
+            RotatedContent(angleDegrees) {
+                AnalyzerDetailsScreen(
+                    container = container,
+                    viewModel = analyzerViewModel,
+                    orientationViewModel = orientationViewModel,
+                    onOpenCalibration = { navController.navigate(ROUTE_CALIBRATION) },
+                    onOpenSnapshots = { navController.navigate(ROUTE_SNAPSHOTS) },
+                    onOpenAppearance = { navController.navigate(ROUTE_APPEARANCE) },
+                    onOpenWatchShortcuts = { navController.navigate(ROUTE_WATCH_SHORTCUTS_HELP) },
+                )
+            }
         }
 
-        composable(ROUTE_SNAPSHOTS) {
-            SnapshotManagerScreen(
-                container = container,
-                onSelectCompare = { id ->
-                    navController.getBackStackEntry(ROUTE_MAIN).savedStateHandle[KEY_COMPARE_SNAPSHOT_ID] = id
-                    navController.popBackStack()
-                },
-            )
+        composable(ROUTE_SNAPSHOTS) { entry ->
+            val mainEntry = remember(entry) { navController.getBackStackEntry(ROUTE_MAIN) }
+            val orientationViewModel: OrientationViewModel = viewModel(viewModelStoreOwner = mainEntry) {
+                OrientationViewModel(container)
+            }
+            val angleDegrees by orientationViewModel.angleDegrees.collectAsStateWithLifecycle()
+            RotatedContent(angleDegrees) {
+                SnapshotManagerScreen(
+                    container = container,
+                    onSelectCompare = { id ->
+                        navController.getBackStackEntry(ROUTE_MAIN).savedStateHandle[KEY_COMPARE_SNAPSHOT_ID] = id
+                        navController.popBackStack()
+                    },
+                )
+            }
         }
 
         composable(ROUTE_RING_DETAILS) { entry ->
@@ -163,7 +191,13 @@ fun StageScopeNavHost(
             val ringViewModel: RingViewModel = viewModel(viewModelStoreOwner = mainEntry) {
                 RingViewModel(container, sessionViewModel.session)
             }
-            RingDetailsScreen(viewModel = ringViewModel)
+            val orientationViewModel: OrientationViewModel = viewModel(viewModelStoreOwner = mainEntry) {
+                OrientationViewModel(container)
+            }
+            val angleDegrees by orientationViewModel.angleDegrees.collectAsStateWithLifecycle()
+            RotatedContent(angleDegrees) {
+                RingDetailsScreen(viewModel = ringViewModel, orientationViewModel = orientationViewModel)
+            }
         }
 
         composable(ROUTE_RING_CAPTURES) { entry ->
@@ -174,7 +208,13 @@ fun StageScopeNavHost(
             val ringViewModel: RingViewModel = viewModel(viewModelStoreOwner = mainEntry) {
                 RingViewModel(container, sessionViewModel.session)
             }
-            RingCapturesScreen(viewModel = ringViewModel)
+            val orientationViewModel: OrientationViewModel = viewModel(viewModelStoreOwner = mainEntry) {
+                OrientationViewModel(container)
+            }
+            val angleDegrees by orientationViewModel.angleDegrees.collectAsStateWithLifecycle()
+            RotatedContent(angleDegrees) {
+                RingCapturesScreen(viewModel = ringViewModel)
+            }
         }
 
         composable(ROUTE_CALIBRATION) { entry ->
@@ -185,15 +225,35 @@ fun StageScopeNavHost(
             val calibrationViewModel: CalibrationViewModel = viewModel(viewModelStoreOwner = mainEntry) {
                 CalibrationViewModel(container, sessionViewModel.session)
             }
-            CalibrationScreen(viewModel = calibrationViewModel, onExit = { navController.popBackStack() })
+            val orientationViewModel: OrientationViewModel = viewModel(viewModelStoreOwner = mainEntry) {
+                OrientationViewModel(container)
+            }
+            val angleDegrees by orientationViewModel.angleDegrees.collectAsStateWithLifecycle()
+            RotatedContent(angleDegrees) {
+                CalibrationScreen(viewModel = calibrationViewModel, onExit = { navController.popBackStack() })
+            }
         }
 
-        composable(ROUTE_APPEARANCE) {
-            AppearanceScreen(container = container)
+        composable(ROUTE_APPEARANCE) { entry ->
+            val mainEntry = remember(entry) { navController.getBackStackEntry(ROUTE_MAIN) }
+            val orientationViewModel: OrientationViewModel = viewModel(viewModelStoreOwner = mainEntry) {
+                OrientationViewModel(container)
+            }
+            val angleDegrees by orientationViewModel.angleDegrees.collectAsStateWithLifecycle()
+            RotatedContent(angleDegrees) {
+                AppearanceScreen(container = container)
+            }
         }
 
-        composable(ROUTE_WATCH_SHORTCUTS_HELP) {
-            WatchShortcutsHelpScreen()
+        composable(ROUTE_WATCH_SHORTCUTS_HELP) { entry ->
+            val mainEntry = remember(entry) { navController.getBackStackEntry(ROUTE_MAIN) }
+            val orientationViewModel: OrientationViewModel = viewModel(viewModelStoreOwner = mainEntry) {
+                OrientationViewModel(container)
+            }
+            val angleDegrees by orientationViewModel.angleDegrees.collectAsStateWithLifecycle()
+            RotatedContent(angleDegrees) {
+                WatchShortcutsHelpScreen()
+            }
         }
     }
 }

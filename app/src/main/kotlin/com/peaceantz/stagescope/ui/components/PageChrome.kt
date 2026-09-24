@@ -24,9 +24,12 @@ import com.peaceantz.stagescope.ui.theme.StageScopeDimens
 import com.peaceantz.stagescope.ui.theme.chartAnnotationStyle
 
 /**
- * Shared skeleton for the three main pager pages: a small centered mode label that doubles as the
+ * Shared skeleton for a main pager page: a small centered mode label that doubles as the
  * (always-visible, labeled) route to Details/Actions, centered primary content, and a lower row
- * of the page's own compact controls.
+ * of the page's own compact controls. Ring is the only remaining user of this scaffold (Analyzer
+ * moved to its own full-bleed circular composition -- see AnalyzerScreen/InstrumentGeometry), so
+ * its chrome is kept deliberately tight: the Ring page's 2-1-2 tile grid needs most of the
+ * available vertical room, and a round 240dp display doesn't leave much of it to spare.
  *
  * Details deliberately is NOT a third button in the lower row: on this round display, 3 circular
  * 48dp controls side by side get clipped by the bezel that close to the bottom edge (confirmed
@@ -45,7 +48,7 @@ fun ModePageScaffold(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = StageScopeDimens.edgeInset, vertical = StageScopeDimens.edgeInset),
+                .padding(start = StageScopeDimens.edgeInset, end = StageScopeDimens.edgeInset, top = 14.dp, bottom = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
@@ -55,7 +58,7 @@ fun ModePageScaffold(
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 12.dp)
+                    .padding(vertical = 4.dp)
                     .clickable(onClick = onOpenDetails)
                     .semantics {
                         contentDescription = "Open $modeTitle details and actions"

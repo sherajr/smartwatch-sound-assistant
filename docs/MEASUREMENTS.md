@@ -62,10 +62,60 @@ saved. Level readings now show Estimated SPL." success screen with a Done action
 - **Radius = amplitude on a fixed -90..0 dBFS scale** (`RadialMapping.radialFractionForDb`) — never autoscaled, so the visual never fabricates movement or exaggerates a weak signal.
 - **Band aggregation**: the raw spectrum (up to 2049 bins) is reduced to `RadialMapping.DISPLAY_BAND_COUNT` (56) log-frequency-spaced display bands via **max aggregation** — each band takes the loudest of its underlying raw bins, never an average, specifically so a narrow one- or two-bin peak still reads at its true amplitude instead of being smeared down by quieter neighbors (`RadialMappingTest."band aggregation preserves a narrow one-bin peak..."`). Each band also records which exact raw bin produced its value.
 - **Same-bin readout guarantee**: the selected band's on-screen frequency (`peakBin * binWidthHz`) and dB value (`band.magnitudeDbfs`) always come from that one real bin — the prior Spectrum page's readout mixed a `dominantFrequencyHz` value with a separately-sourced cursor-bin dB value, which this redesign deliberately does not repeat.
-- Tap the ring (angle → `RadialMapping.fractionForAngle`, null if inside the gap) or turn the crown (`AnalyzerViewModel.moveCursor`/`setCursorArcFraction`) to move the selection; until the user does either, the cursor auto-follows the loudest band each frame.
+- Tap the ring (angle → `RadialMapping.fractionForAngle`, null if inside the gap) to move the selection (`AnalyzerViewModel.setCursorArcFraction`); until the user taps, the cursor auto-follows the loudest band each frame. The crown no longer moves the cursor — see "Crown-driven orientation" below; it now rotates the whole instrument instead, so band selection is touch-only.
 - **Freeze is spectrum-only**: `AnalyzerViewModel.freeze()` stops pushing new samples into the FFT window and marks `SpectrumDisplay.isHeld = true`; the center RMS reading and Ring detection are entirely unaffected (they read from the same shared `CaptureSession` blocks independently) — the unit line shows "SPECTRUM HELD" so the two are never confused.
 - Peak hold decays gradually (`PEAK_HOLD_DECAY_DB` per published frame) and is drawn as a muted outline distinct from the live bars; a compared snapshot draws as a dashed outline in the Held accent color; the selection cursor draws as a bright spoke — three visually distinguishable elements, plus the live bars themselves, none relying on color alone (dash style / fill vs. outline differ too).
 - Snapshots store the full magnitude array plus sample rate, FFT size, source, and calibration state. Two snapshots (or a snapshot vs. the live spectrum) are only overlaid if `sampleRate` and `fftSize` match; otherwise the UI says so instead of drawing a misleading overlay.
+
+## Full-bleed circular layout and the circumference level meter (`ui/analyzer/InstrumentGeometry.kt`, `LevelMeterRing.kt`, `LevelMeterScale.kt`)
+
+- The Analyzer page is a single full-screen `Box`/`BoxWithConstraints` (no header/footer Column
+  eating into it) with three concentric regions, all derived from one `usableRadius = min(width,
+  height)/2` by `InstrumentGeometry.compute`: an outer circumference **level meter** (~96.5% of
+  `usableRadius` to its outer edge), the radial spectrum annulus just inside it (a small documented
+  gap between them), and an inner "safe zone" circle (≈57% of `usableRadius`, i.e. 92% of the
+  spectrum's own inner radius) that holds all text and the two action buttons. `InstrumentGeometryTest`
+  checks the nesting/ordering invariant, not exact pixel values — the fractions are starting points
+  to retune after further on-device viewing, not derived from acoustic or ergonomic research.
+- The level meter tracks the **same RMS quantity as the center reading** (`AnalyzerReading.
+  rmsDisplayDbfs`), on a **fixed, documented scale that depends on calibration state**
+  (`LevelMeterScale`): uncalibrated is -90..0 dBFS (`DbScale.FLOOR_DBFS`..0); calibrated is a fixed
+  30..120 dB Estimated-SPL band — an initial engineering range (typical theatre monitoring), not a
+  measured one, shown in Analyzer Details as "Level meter range". Using `rmsDisplayDbfs` (not the
+  always-raw `rmsRawDbfs`) for both the calibrated and uncalibrated cases is what keeps a positive
+  Estimated-SPL number from ever being plotted against the negative dBFS range meant for the other
+  case (`LevelMeterScaleTest` checks both ranges and clamping past either endpoint).
+- The meter keeps updating from whatever `levelFraction` it's given even while the spectrum annulus
+  is frozen (Freeze is spectrum-only, unchanged from before). It applies a modest cosmetic ease
+  (`animateFloatAsState`, 180ms) purely in the render layer — the underlying measurement passed in
+  is never altered by that smoothing. Clipping swaps the illuminated color to the same semantic
+  "fault" accent the center CLIP badge already uses (never a graduated hearing-safety gradient by
+  color) — the center badge's icon+text remains the authoritative non-color signal.
+
+## Crown-driven orientation (`ui/rotation/`)
+
+- Turning the crown on the Analyzer or Ring page rotates the **entire** instrument (text, spectrum,
+  level meter, buttons, Ring tiles) together as one rigid unit via `Modifier.graphicsLayer {
+  rotationZ = angleDegrees }` — a pure render transform applied once per screen, so Compose already
+  re-expresses touch/focus input in the rotated local coordinate space for any children (the tap-to-
+  select-band gesture needs no separate inverse-rotation math because of this).
+- `OrientationViewModel` (scoped to the `"main"` nav backstack entry, alongside `CaptureSession`)
+  holds one shared, **unwrapped** angle (`OrientationMath.applyDelta` — can exceed 360° or go
+  negative) so continuous rotation never jumps at the 0/360 seam; only the persisted/settled value
+  is normalized (`OrientationMath.normalize`) via `AppSettings.instrumentOrientationDegrees`, written
+  800ms after the crown stops moving (never per tick). Every secondary screen (Details, Calibration,
+  Appearance, Snapshots, Ring Captures/Details) visually inherits the same angle
+  (`ui/components/RotatedContent.kt`) without any crown rewiring of its own — their own rotary
+  behavior (scroll a list, adjust a focused number) is untouched, since rotary events are scroll
+  deltas, not screen positions, and are unaffected by a visual rotation.
+- The rotation transform is applied *inside* each page's own content, never around the pager or the
+  nav host — so the pager's swipe-to-page gesture and the nav host's swipe-to-dismiss gesture both
+  stay in true screen space at any rotation angle, and the page indicator dots (drawn by the pager
+  scaffold, outside any page's own rotated content) never rotate either.
+- `AnalyzerDetailsScreen`/`RingDetailsScreen` both offer "Reset orientation" (back to 0°) and "Lock
+  orientation" (crown stops affecting the angle until unlocked) — `OrientationMath.
+  DEGREES_PER_ROTARY_PIXEL` (0.24) is an initial engineering sensitivity constant, not a measured
+  one.
 
 ## Find a Ring — five-slot capture bank
 
@@ -79,6 +129,17 @@ saved. Level readings now show Estimated SPL." success screen with a Done action
    - **Selected capture** (`selectCapture`/`heroCapture`) — whichever the user is currently looking at on the Ring page. State is SEARCHING (nothing yet) / DETECTING (an unconfirmed track exists) / LIVE (matched within the last `maxDropoutMs`) / HELD (past that but within `autoHoldMs`, default 20s, configurable 10/20/30s) / EXPIRED (past `autoHoldMs`, unpinned — shown "HISTORICAL") / PINNED (stays selected regardless of hold expiry) / PAUSED.
    - **Pinned** (`pin(id)`/`unpin(id)`/`setPinned(id, Boolean)`) — **independent per capture**. Pinning one never unpins another; any of the 0–5 slots can be pinned in any combination. Pinned captures are persisted (id/frequency/save-time, never audio) via `RingBankRepository` and restored at startup via `RingTracker.restoreCapture()`, marked `restoredFromDisk` (shown "SAVED" in the Captures list) until a live detection updates them again, with ids that never collide with a freshly-confirmed capture's id.
    - **Most prominent** (`RingSnapshot.mostProminentCaptureId`) — the strongest currently-**LIVE** confirmed capture by smoothed spectral prominence, entirely independent of the selected capture and of any pinned flags. Switches promptly (no dwell) to a clearly stronger candidate (≥`prominenceSwitchMarginDb`, 4 dB); a near-equal candidate must lead for `prominenceDwellMs` (600ms) before taking over — hysteresis against flapping between two similar tones. Sticky when nothing is currently live (keeps returning the last id it held, so callers can show it as cached/"Last"), and cleared when that specific capture is removed by a clear or an eviction. **This — not "pinned, else most recent" — is what the watch-face complication shows** (see below); manually selecting or pinning a capture never redefines it.
+
+**Ring page display**: `ui/ring/RingTilesGrid.kt` shows all five slots at once, arranged 2-1-2, rather
+than the old single "hero" frequency + a separate Captures link. Screen position is kept stable by
+`RingSlotAssigner`, which assigns each currently-live capture id to a slot and leaves it there for as
+long as that capture exists — **not** the same order as `RingSnapshot.history` (sorted by
+`lastSeenAtMs`, which changes on every live frame and would otherwise reshuffle tiles constantly
+while the user is trying to tap one). A tap on a populated tile toggles that capture's pin directly
+(`pin`/`unpin`); a long-press selects it and opens the Captures list for inspection/clearing. The
+most-prominent capture gets an understated outline on whichever slot it currently occupies — never a
+duplicated large number. An empty slot shows a restrained "—" (bordered, not solid black-on-black, so
+it stays visibly present rather than disappearing against the screen background).
 
 All timing uses an injected `MonotonicClock` (`System.nanoTime()`-based in production), never a frame counter, so behavior is identical whether frames arrive at 10Hz or in a burst. Full behavioral contract — jitter, transient rejection, dwell timing, dropout tolerance, held-frequency freezing, auto-hold expiry/reselection, recurring-tone dedup (resolution-aware), five simultaneous/sequential captures, a sixth candidate's eviction rules, all-five-pinned behavior, clear-unpinned, most-prominent selection/hysteresis/stickiness, restore-from-disk id stability — is in `RingTrackerTest`, including a full-pipeline acceptance test (real FFT + synthesized PCM) for the spec's "2.15kHz for one second, then silence, then a separate 3.2kHz tone" scenario.
 
@@ -155,3 +216,20 @@ Centralized in `dsp/FrequencyBands.kt` (Rumble 20–80 Hz, Body 80–250 Hz, War
       crescents), and the Analyzer center text still fits inside the ring without overlapping it, on
       your specific watch. Repeat around 192dp, 227dp, and 240dp round screens if more than one is
       available.
+- [ ] Analyzer fills the round display: the level meter's outer edge sits close to the bezel, the
+      spectrum annulus is clearly the main instrument (not a small central circle), and there's a
+      visible gap between the meter and the spectrum. Confirm the whole boundary at several crown
+      rotation angles, not just the unrotated screenshot — a rotated view must not reveal a button,
+      tile, or text line that was only safe at 0°.
+- [ ] Ring page shows all 5 slots at once without opening Captures; tap a populated tile toggles its
+      pin immediately (icon/color updates); long-press opens Captures with that capture selected.
+      Confirm tile positions do NOT shuffle as prominence/recency changes live, and that the
+      most-prominent tile's outline moves without moving the tile itself.
+- [ ] Turn the crown on Analyzer and on Ring: the whole instrument (text, spectrum, meter, buttons,
+      tiles) rotates together, smoothly, in both directions, through a full 360° with no jump at the
+      seam. Swiping ANALYZER↔RING and the system back/dismiss gesture still work normally at a
+      rotated angle. Reset orientation and Lock orientation (Analyzer/Ring Details) both work; the
+      angle survives backgrounding and a fresh cold launch (persisted, not per-tick).
+- [ ] With calibration active, confirm the level meter uses the Estimated-SPL range (Analyzer
+      Details → "Level meter range") and is never pinned at 100% by a positive SPL number the way a
+      -90..0 dBFS scale would misread it.

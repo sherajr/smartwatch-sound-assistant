@@ -26,6 +26,9 @@ data class RingMeasurement(
     val liveSpectrum: SpectrumAnalyzer.Frame?,
     val sourceLabel: String,
     val isDemo: Boolean,
+    /** Stable screen-slot -> capture-id assignment for the five-tile Ring grid -- see
+     *  [RingSlotAssigner]. Always [RingTrackerSettings.maxCaptures] entries, `null` = empty slot. */
+    val slotCaptureIds: List<Long?>,
 )
 
 sealed interface RingUiState {
@@ -48,19 +51,31 @@ class RingViewModel(private val container: AppContainer, private val session: Ca
     private val tracker = RingTracker()
 
     private val _uiState = MutableStateFlow<RingUiState>(
-        RingUiState.Measuring(RingMeasurement(emptySnapshot(), null, "", false))
+        RingUiState.Measuring(RingMeasurement(emptySnapshot(), null, "", false, List(5) { null }))
     )
     val uiState: StateFlow<RingUiState> = _uiState.asStateFlow()
+
+    // RingUiState has no distinct "not started" case (unlike AnalyzerUiState) -- it always shows
+    // the tile grid, even before Start is ever pressed, so the bottom Start/Stop control needs its
+    // own signal for whether the shared session is actually running.
+    private val _isActive = MutableStateFlow(false)
+    val isActive: StateFlow<Boolean> = _isActive.asStateFlow()
 
     private var currentConfig: CaptureConfig? = null
     private var lastPublishMillis = 0L
     private var lastPersistedRingKey: Triple<Long, Boolean, Double>? = null
+    private var slotCaptureIds: List<Long?> = List(5) { null }
 
     private val listener: (FloatArray) -> Unit = { block -> onBlock(block) }
 
     init {
         applyPersistedAutoHold()
         restorePinnedBank()
+        // Without this, a restored pin sits in the tracker but never reaches `_uiState` (whose
+        // hardcoded initial value predates the restore) until some other event -- e.g. Start --
+        // happens to call publishCurrent() first; the five-tile grid should show restored pins
+        // immediately, not only after the session has run at least once this app session.
+        publishCurrent()
         session.addListener(listener)
         viewModelScope.launch { session.status.collect(::handleStatus) }
     }
@@ -147,6 +162,7 @@ class RingViewModel(private val container: AppContainer, private val session: Ca
     }
 
     private fun handleStatus(status: CaptureStatus) {
+        _isActive.value = status is CaptureStatus.Running
         when (status) {
             is CaptureStatus.Running -> {
                 val config = status.config
@@ -176,8 +192,9 @@ class RingViewModel(private val container: AppContainer, private val session: Ca
         val frame = analyzer.computeFrame(config.sampleRate) ?: return
         lastPublishMillis = now
         val snap = tracker.update(frame)
+        slotCaptureIds = RingSlotAssigner.update(slotCaptureIds, snap.history.map { it.id })
         _uiState.value = RingUiState.Measuring(
-            RingMeasurement(snap, frame, config.sourceLabel, config.isDemo)
+            RingMeasurement(snap, frame, config.sourceLabel, config.isDemo, slotCaptureIds)
         )
         maybePersistRingSummary(snap, config.isDemo)
     }
@@ -186,8 +203,9 @@ class RingViewModel(private val container: AppContainer, private val session: Ca
     private fun publishCurrent() {
         val snap = tracker.currentSnapshot()
         val config = currentConfig
+        slotCaptureIds = RingSlotAssigner.update(slotCaptureIds, snap.history.map { it.id })
         _uiState.value = RingUiState.Measuring(
-            RingMeasurement(snap, null, config?.sourceLabel ?: "", config?.isDemo ?: false)
+            RingMeasurement(snap, null, config?.sourceLabel ?: "", config?.isDemo ?: false, slotCaptureIds)
         )
         maybePersistRingSummary(snap, config?.isDemo ?: false)
     }

@@ -1,18 +1,26 @@
 package com.peaceantz.stagescope.ui.ring
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
-import com.peaceantz.stagescope.dsp.RingCaptureState
+import com.peaceantz.stagescope.dsp.RingCapture
 import com.peaceantz.stagescope.ui.components.CompactGlyphButton
 import com.peaceantz.stagescope.ui.components.KeepScreenOnEffect
 import com.peaceantz.stagescope.ui.components.ModePageScaffold
@@ -20,39 +28,41 @@ import com.peaceantz.stagescope.ui.components.StateBadge
 import com.peaceantz.stagescope.ui.components.rememberAudioPermissionRequester
 import com.peaceantz.stagescope.ui.theme.LocalStageScopePalette
 import com.peaceantz.stagescope.ui.theme.chartAnnotationStyle
-import com.peaceantz.stagescope.ui.theme.frequencyStyle
-import com.peaceantz.stagescope.ui.theme.secondaryStyle
 
 @Composable
-fun RingScreen(viewModel: RingViewModel, onOpenDetails: () -> Unit, onOpenCaptures: () -> Unit) {
+fun RingScreen(
+    viewModel: RingViewModel,
+    angleDegrees: Float,
+    orientationLocked: Boolean,
+    onRotaryDelta: (Float) -> Unit,
+    onOpenDetails: () -> Unit,
+    onOpenCaptures: () -> Unit,
+) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val isActive by viewModel.isActive.collectAsStateWithLifecycle()
     val requestStart = rememberAudioPermissionRequester(onGranted = viewModel::start)
-    val isMeasuring = state is RingUiState.Measuring
-    KeepScreenOnEffect(enabled = isMeasuring)
+    KeepScreenOnEffect(enabled = isActive)
     val palette = LocalStageScopePalette.current
+
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
     ModePageScaffold(
         modeTitle = "RING",
         onOpenDetails = onOpenDetails,
+        modifier = Modifier
+            .graphicsLayer { rotationZ = angleDegrees }
+            .focusRequester(focusRequester)
+            .focusable()
+            .onRotaryScrollEvent { event ->
+                if (!orientationLocked) onRotaryDelta(event.verticalScrollPixels)
+                true
+            },
         lowerActions = {
-            when (val s = state) {
-                is RingUiState.Measuring -> {
-                    val hero = s.measurement.snapshot.heroCapture
-                    val pinned = hero?.pinned == true
-                    CompactGlyphButton(
-                        glyph = if (pinned) "◇" else "◆",
-                        contentDescription = if (pinned) "Unpin capture" else "Pin capture",
-                        enabled = hero != null,
-                        onClick = { hero?.let { if (pinned) viewModel.unpin(it.id) else viewModel.pin(it.id) } },
-                    )
-                    CompactGlyphButton(
-                        glyph = "✕",
-                        contentDescription = "Clear selected capture",
-                        enabled = hero != null,
-                        onClick = viewModel::clearSelected,
-                    )
-                }
-                else -> CompactGlyphButton(glyph = "▶", contentDescription = "Start measuring", onClick = requestStart)
+            if (isActive) {
+                CompactGlyphButton(glyph = "■", contentDescription = "Stop measuring", onClick = viewModel::stop)
+            } else {
+                CompactGlyphButton(glyph = "▶", contentDescription = "Start measuring", onClick = requestStart)
             }
         },
     ) {
@@ -60,74 +70,69 @@ fun RingScreen(viewModel: RingViewModel, onOpenDetails: () -> Unit, onOpenCaptur
             RingUiState.PermissionDenied -> StateBadge("⚠", "Mic permission denied", palette.Held)
             is RingUiState.Unavailable -> StateBadge("⚠", "Unavailable", palette.Held)
             is RingUiState.Error -> StateBadge("⚠", "Error", palette.Held)
-            is RingUiState.Measuring -> RingHero(s.measurement, onOpenCaptures)
+            is RingUiState.Measuring -> RingGridContent(
+                measurement = s.measurement,
+                autoHoldMs = viewModel.autoHoldSeconds() * 1000L,
+                onTogglePin = { capture -> if (capture.pinned) viewModel.unpin(capture.id) else viewModel.pin(capture.id) },
+                onInspect = { capture ->
+                    viewModel.selectCapture(capture.id)
+                    onOpenCaptures()
+                },
+            )
         }
     }
 }
 
 @Composable
-private fun RingHero(measurement: RingMeasurement, onOpenCaptures: () -> Unit) {
+private fun RingGridContent(
+    measurement: RingMeasurement,
+    autoHoldMs: Long,
+    onTogglePin: (RingCapture) -> Unit,
+    onInspect: (RingCapture) -> Unit,
+) {
     val snap = measurement.snapshot
-    val hero = snap.heroCapture
     val palette = LocalStageScopePalette.current
 
-    val (symbol, label, color) = stateBadgeFor(snap.heroState, palette)
-    StateBadge(symbol, label, color)
+    // Sized from the FULL available content area (grid + any extra status lines below it), not
+    // just the grid's own intrinsic size -- otherwise the bottom row of tiles (and/or the status
+    // lines) can silently overflow past the page's content bounds on a round display. The
+    // "all pinned" message is long enough to wrap to two lines at this width, so it gets a larger
+    // reservation than the single-line demo tag.
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val reservedForExtras = (if (snap.allSlotsPinned) 34.dp else 0.dp) + (if (measurement.isDemo) 16.dp else 0.dp)
+        val gridHeightBudget = (maxHeight - reservedForExtras).coerceAtLeast(0.dp)
+        val rowSpacing = 5.dp
+        val tileSize = minOf(maxWidth / 2.7f, (gridHeightBudget - rowSpacing * 2) / 3f).coerceIn(30.dp, 60.dp)
 
-    val heroFreq = hero?.frequencyHz ?: snap.detectingFrequencyHz
-    Text(
-        text = heroFreq?.let { formatHz(it) } ?: "—",
-        style = frequencyStyle(),
-        color = if (hero != null) color else MaterialTheme.colorScheme.onBackground,
-    )
-
-    if (hero != null) {
-        val tag = if (hero.restoredFromDisk) "saved · prominence ${"%.0f".format(hero.prominenceDb)} dB" else "prominence ${"%.0f".format(hero.prominenceDb)} dB"
-        Text(text = tag, style = secondaryStyle(), color = MaterialTheme.colorScheme.onSurfaceVariant)
-    } else if (snap.heroState == RingCaptureState.SEARCHING) {
-        Text(
-            text = "Listening for a persistent tone",
-            style = secondaryStyle(),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-
-    Spacer(Modifier.height(6.dp))
-    Column(
-        modifier = Modifier.clickable(onClick = onOpenCaptures),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = "Captures ${snap.slotsUsed}/${snap.slotsTotal} ›",
-            style = chartAnnotationStyle(),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (snap.allSlotsPinned) {
-            Text(
-                text = "All 5 pinned — unpin or clear one to capture another",
-                style = chartAnnotationStyle(),
-                color = palette.Held,
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            RingTilesGrid(
+                slotCaptureIds = measurement.slotCaptureIds,
+                captures = snap.history,
+                mostProminentCaptureId = snap.mostProminentCaptureId,
+                autoHoldMs = autoHoldMs,
+                tileSize = tileSize,
+                rowSpacing = rowSpacing,
+                onTogglePin = onTogglePin,
+                onInspect = onInspect,
             )
+            if (snap.allSlotsPinned) {
+                Text(
+                    text = "All 5 pinned — unpin or clear one to capture another",
+                    style = chartAnnotationStyle(),
+                    color = palette.Held,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (measurement.isDemo) {
+                Text(
+                    "DEMO — synthetic signal",
+                    style = chartAnnotationStyle(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
-
-    if (measurement.isDemo) {
-        Text("DEMO — synthetic signal", style = chartAnnotationStyle(), color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
 }
-
-private fun stateBadgeFor(
-    state: RingCaptureState,
-    palette: com.peaceantz.stagescope.ui.theme.StageScopePalette,
-): Triple<String, String, androidx.compose.ui.graphics.Color> = when (state) {
-    RingCaptureState.SEARCHING -> Triple("●", "SEARCHING", palette.SecondaryText)
-    RingCaptureState.DETECTING -> Triple("●", "DETECTING", palette.Live)
-    RingCaptureState.LIVE -> Triple("●", "LIVE", palette.Live)
-    RingCaptureState.HELD -> Triple("◆", "HELD", palette.Held)
-    RingCaptureState.EXPIRED -> Triple("◇", "HISTORICAL", palette.SecondaryText)
-    RingCaptureState.PINNED -> Triple("◆", "PINNED", palette.Held)
-    RingCaptureState.PAUSED -> Triple("●", "PAUSED", palette.SecondaryText)
-}
-
-private fun formatHz(hz: Double): String =
-    if (hz >= 1000.0) "%.2f kHz".format(hz / 1000.0) else "%.0f Hz".format(hz)

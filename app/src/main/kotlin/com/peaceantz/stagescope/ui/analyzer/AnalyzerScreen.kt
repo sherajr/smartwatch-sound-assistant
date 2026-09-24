@@ -2,39 +2,61 @@ package com.peaceantz.stagescope.ui.analyzer
 
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
-import com.peaceantz.stagescope.data.SpectrumSnapshot
 import com.peaceantz.stagescope.ui.components.CompactGlyphButton
 import com.peaceantz.stagescope.ui.components.KeepScreenOnEffect
-import com.peaceantz.stagescope.ui.components.ModePageScaffold
+import com.peaceantz.stagescope.ui.components.PrimaryActionRow
 import com.peaceantz.stagescope.ui.components.StateBadge
 import com.peaceantz.stagescope.ui.components.rememberAudioPermissionRequester
 import com.peaceantz.stagescope.ui.theme.LocalStageScopePalette
+import com.peaceantz.stagescope.ui.theme.StageScopePalette
+import com.peaceantz.stagescope.ui.theme.chartAnnotationStyle
 import com.peaceantz.stagescope.ui.theme.compactReadoutStyle
 import com.peaceantz.stagescope.ui.theme.primaryLevelStyle
 import com.peaceantz.stagescope.ui.theme.secondaryStyle
 import kotlin.math.atan2
+import kotlin.math.min
 
+/**
+ * The Analyzer page: a full-bleed circular composition (see [InstrumentGeometry]) with the
+ * circumference [LevelMeterRing], the [RadialSpectrumCanvas] annulus just inside it, and all text
+ * and controls confined to the inner "safe zone" circle -- never a Canvas nested inside a
+ * header/footer Column that shrinks its usable size. The whole thing (title, readings, spectrum,
+ * meter, buttons) rotates together as one rigid unit driven by the crown, via [angleDegrees]; band
+ * selection stays available through touch (tap the arc) exactly as before.
+ */
 @Composable
 fun AnalyzerScreen(
     viewModel: AnalyzerViewModel,
     compareSnapshotId: String?,
+    angleDegrees: Float,
+    orientationLocked: Boolean,
+    onRotaryDelta: (Float) -> Unit,
     onOpenDetails: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -45,15 +67,80 @@ fun AnalyzerScreen(
     val isMeasuring = state is AnalyzerUiState.Measuring
     KeepScreenOnEffect(enabled = isMeasuring)
 
-    val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(isMeasuring) { if (isMeasuring) focusRequester.requestFocus() }
-
     val palette = LocalStageScopePalette.current
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
-    ModePageScaffold(
-        modeTitle = "ANALYZER",
-        onOpenDetails = onOpenDetails,
-        lowerActions = {
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer { rotationZ = angleDegrees }
+            .focusRequester(focusRequester)
+            .focusable()
+            .onRotaryScrollEvent { event ->
+                if (!orientationLocked) onRotaryDelta(event.verticalScrollPixels)
+                true
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        val usableRadiusDp = min(maxWidth.value, maxHeight.value) / 2f
+        val radii = InstrumentGeometry.compute(usableRadiusDp)
+        val centerDiameter = (radii.centerSafeRadius * 2).dp
+
+        val reading = (state as? AnalyzerUiState.Measuring)?.reading
+        val spectrum = reading?.spectrum
+        val currentCompare = compareSnapshot
+
+        if (reading != null && spectrum != null) {
+            val compatible = currentCompare != null &&
+                currentCompare.sampleRate == spectrum.sampleRate &&
+                currentCompare.fftSize == spectrum.fftSize
+
+            LevelMeterRing(
+                levelFraction = LevelMeterScale.fraction(reading.rmsDisplayDbfs, reading.isCalibrated),
+                isClipping = reading.isClippingNow,
+                modifier = Modifier.fillMaxSize(),
+            )
+            RadialSpectrumCanvas(
+                spectrum = spectrum,
+                compareSnapshot = currentCompare,
+                isComparisonCompatible = compatible,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures { offset ->
+                            val cx = size.width / 2f
+                            val cy = size.height / 2f
+                            val angleDeg = Math.toDegrees(
+                                atan2((offset.y - cy).toDouble(), (offset.x - cx).toDouble())
+                            ).toFloat()
+                            RadialMapping.fractionForAngle(angleDeg)?.let(viewModel::setCursorArcFraction)
+                        }
+                    },
+            )
+        }
+
+        Column(
+            modifier = Modifier.size(centerDiameter),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = "ANALYZER ›",
+                style = chartAnnotationStyle(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .padding(vertical = 4.dp)
+                    .clickable(onClick = onOpenDetails)
+                    .semantics {
+                        contentDescription = "Open ANALYZER details and actions"
+                        role = Role.Button
+                    },
+            )
+            AnalyzerCenterBody(state = state, palette = palette)
+        }
+
+        PrimaryActionRow(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) {
             when (val s = state) {
                 is AnalyzerUiState.Measuring -> {
                     val held = s.reading.spectrum?.isHeld == true
@@ -66,71 +153,20 @@ fun AnalyzerScreen(
                 }
                 else -> CompactGlyphButton(glyph = "▶", contentDescription = "Start measuring", onClick = requestStart)
             }
-        },
-    ) {
-        when (val s = state) {
-            AnalyzerUiState.NotStarted -> StateBadge("●", "Ready", MaterialTheme.colorScheme.onSurfaceVariant)
-            AnalyzerUiState.PermissionDenied -> StateBadge("⚠", "Mic permission denied", palette.Held)
-            is AnalyzerUiState.Unavailable -> StateBadge("⚠", "Unavailable", palette.Held)
-            is AnalyzerUiState.Error -> StateBadge("⚠", "Error", palette.Held)
-            AnalyzerUiState.Paused -> StateBadge("●", "Paused", MaterialTheme.colorScheme.onSurfaceVariant)
-            is AnalyzerUiState.Measuring -> AnalyzerDial(
-                reading = s.reading,
-                compareSnapshot = compareSnapshot,
-                focusRequester = focusRequester,
-                onMoveCursor = viewModel::moveCursor,
-                onTapArcFraction = viewModel::setCursorArcFraction,
-            )
         }
     }
 }
 
 @Composable
-private fun AnalyzerDial(
-    reading: AnalyzerReading,
-    compareSnapshot: SpectrumSnapshot?,
-    focusRequester: FocusRequester,
-    onMoveCursor: (Int) -> Unit,
-    onTapArcFraction: (Float) -> Unit,
-) {
-    val palette = LocalStageScopePalette.current
-    val spectrum = reading.spectrum
-    val compatible = compareSnapshot != null &&
-        spectrum != null &&
-        compareSnapshot.sampleRate == spectrum.sampleRate &&
-        compareSnapshot.fftSize == spectrum.fftSize
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .focusRequester(focusRequester)
-            .focusable()
-            .onRotaryScrollEvent { event ->
-                onMoveCursor(if (event.verticalScrollPixels > 0) 1 else -1)
-                true
-            }
-            .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    val cx = size.width / 2f
-                    val cy = size.height / 2f
-                    val angleDeg = Math.toDegrees(
-                        atan2((offset.y - cy).toDouble(), (offset.x - cx).toDouble())
-                    ).toFloat()
-                    RadialMapping.fractionForAngle(angleDeg)?.let(onTapArcFraction)
-                }
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        if (spectrum != null) {
-            RadialSpectrumCanvas(
-                spectrum = spectrum,
-                compareSnapshot = compareSnapshot,
-                isComparisonCompatible = compatible,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+private fun AnalyzerCenterBody(state: AnalyzerUiState, palette: StageScopePalette) {
+    when (state) {
+        AnalyzerUiState.NotStarted -> StateBadge("●", "Ready", MaterialTheme.colorScheme.onSurfaceVariant)
+        AnalyzerUiState.PermissionDenied -> StateBadge("⚠", "Mic permission denied", palette.Held)
+        is AnalyzerUiState.Unavailable -> StateBadge("⚠", "Unavailable", palette.Held)
+        is AnalyzerUiState.Error -> StateBadge("⚠", "Error", palette.Held)
+        AnalyzerUiState.Paused -> StateBadge("●", "Paused", MaterialTheme.colorScheme.onSurfaceVariant)
+        is AnalyzerUiState.Measuring -> {
+            val reading = state.reading
             if (reading.isClippingNow) {
                 StateBadge("⚠", "CLIP", palette.Held)
             } else if (reading.isSuspiciousSilence) {
@@ -148,6 +184,7 @@ private fun AnalyzerDial(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
+            val spectrum = reading.spectrum
             if (spectrum != null) {
                 val band = spectrum.bands.getOrNull(spectrum.cursorBandIndex)
                 if (band != null) {

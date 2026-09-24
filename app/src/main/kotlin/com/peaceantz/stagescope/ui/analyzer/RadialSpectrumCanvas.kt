@@ -4,34 +4,37 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.text.drawText
 import com.peaceantz.stagescope.data.SpectrumSnapshot
 import com.peaceantz.stagescope.dsp.DbScale
 import com.peaceantz.stagescope.ui.theme.LocalStageScopePalette
-import com.peaceantz.stagescope.ui.theme.chartAnnotationStyle
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
 private val GRID_DB_LINES = listOf(0.0, -20.0, -40.0, -60.0, -80.0)
-private val TICK_FREQUENCIES_HZ = listOf(100.0, 1_000.0, 10_000.0)
 
 /**
  * The radial spectrum annulus: angle = logarithmic frequency (one consistent clockwise direction,
  * DC excluded, capped at the negotiated Nyquist), radius = amplitude on a fixed -90..0 dBFS scale
- * (never autoscaled). Bands come pre-aggregated from [RadialMapping.aggregateBands] via
- * [AnalyzerViewModel] -- this composable only draws them, so the same band data that fed the
- * on-screen frequency/dB readout is exactly what's rendered here (no separate recomputation that
- * could disagree). Live trace = theme "Live" accent, peak hold = a muted outline, a compared
- * snapshot = a dashed "Held" outline, and the selection cursor = a bright spoke -- four visually
- * distinguishable elements, none of which rely on color alone (peak hold and comparison also
- * differ in dash/line style from the live trace).
+ * (never autoscaled). Occupies the annulus between [InstrumentGeometry.Radii.spectrumInner] and
+ * `.spectrumOuter` -- just inside the separate circumference [LevelMeterRing], with the small
+ * documented gap between them -- rather than a small central circle; see [InstrumentGeometry] for
+ * how those boundaries are derived from the same full-bleed box this canvas fills.
+ *
+ * Bands come pre-aggregated from [RadialMapping.aggregateBands] via [AnalyzerViewModel] -- this
+ * composable only draws them, so the same band data that fed the on-screen frequency/dB readout is
+ * exactly what's rendered here (no separate recomputation that could disagree). Live trace = theme
+ * "Live" accent, peak hold = a muted outline, a compared snapshot = a dashed "Held" outline, and the
+ * selection cursor = a bright spoke -- four visually distinguishable elements, none of which rely on
+ * color alone (peak hold and comparison also differ in dash/line style from the live trace).
+ *
+ * Deliberately restrained: no frequency tick labels/lines around the outer edge (that information
+ * is available via the center cursor readout on tap) and no glow or secondary outlines -- just the
+ * sparse dB grid, the live trace, peak hold, and the cursor.
  */
 @Composable
 fun RadialSpectrumCanvas(
@@ -41,18 +44,14 @@ fun RadialSpectrumCanvas(
     modifier: Modifier = Modifier,
 ) {
     val palette = LocalStageScopePalette.current
-    val textMeasurer = rememberTextMeasurer()
-    val tickStyle = chartAnnotationStyle()
     val bandCount = spectrum.bands.size
 
     Canvas(modifier = modifier) {
         val center = Offset(size.width / 2f, size.height / 2f)
-        val outerBound = (minOf(size.width, size.height) / 2f) * 0.96f
-        val outerRadius = outerBound * 0.86f
-        // Leaves a generously sized central "safe zone" for the primary reading + unit + cursor
-        // readout text, which together need more room than a thin annulus would otherwise leave.
-        val innerRadius = outerBound * 0.62f
-        val tickRadius = outerBound * 0.985f
+        val usableRadius = minOf(size.width, size.height) / 2f
+        val radii = InstrumentGeometry.compute(usableRadius)
+        val outerRadius = radii.spectrumOuter
+        val innerRadius = radii.spectrumInner
 
         fun pointAt(angleDeg: Float, radius: Float): Offset {
             val rad = angleDeg * (PI.toFloat() / 180f)
@@ -73,28 +72,6 @@ fun RadialSpectrumCanvas(
                 topLeft = Offset(center.x - r, center.y - r),
                 size = androidx.compose.ui.geometry.Size(r * 2, r * 2),
                 style = Stroke(width = 1f),
-            )
-        }
-
-        // Sparse frequency tick labels around the outer edge.
-        for (hz in TICK_FREQUENCIES_HZ) {
-            if (hz >= spectrum.nyquistHz) continue
-            val minBin = 1
-            val maxBin = (spectrum.magnitudesDbfs.size - 1).coerceAtLeast(minBin + 1)
-            val bin = (hz / spectrum.binWidthHz).toInt().coerceIn(minBin, maxBin)
-            val band = RadialMapping.bandForBin(bin, minBin, maxBin, bandCount)
-            val angle = RadialMapping.angleForFraction(RadialMapping.fractionForBand(band, bandCount))
-            val tickStart = pointAt(angle, outerRadius)
-            val tickEnd = pointAt(angle, tickRadius)
-            drawLine(palette.Grid, tickStart, tickEnd, strokeWidth = 1.5f)
-            val label = if (hz >= 1000.0) "${(hz / 1000.0).toInt()}k" else "${hz.toInt()}"
-            val measured = textMeasurer.measure(label, tickStyle)
-            val labelPoint = pointAt(angle, tickRadius + 6f)
-            drawText(
-                textMeasurer,
-                label,
-                topLeft = Offset(labelPoint.x - measured.size.width / 2f, labelPoint.y - measured.size.height / 2f),
-                style = tickStyle,
             )
         }
 
@@ -148,7 +125,7 @@ fun RadialSpectrumCanvas(
         // into the central text "safe zone" (the primary reading/unit/cursor-readout text).
         val cursorAngle = RadialMapping.angleForFraction(RadialMapping.fractionForBand(spectrum.cursorBandIndex, bandCount))
         val cursorInner = pointAt(cursorAngle, innerRadius)
-        val cursorOuter = pointAt(cursorAngle, outerRadius * 1.04f)
+        val cursorOuter = pointAt(cursorAngle, outerRadius * 1.02f)
         drawLine(palette.PrimaryText, cursorInner, cursorOuter, strokeWidth = 1.5f)
         drawCircle(palette.PrimaryText, radius = 3.5f, center = cursorOuter)
     }

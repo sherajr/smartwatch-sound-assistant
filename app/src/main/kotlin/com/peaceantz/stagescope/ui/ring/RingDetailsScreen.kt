@@ -15,11 +15,13 @@ import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
 import com.peaceantz.stagescope.ui.components.DetailButton
+import com.peaceantz.stagescope.ui.rotation.OrientationViewModel
 
 @Composable
-fun RingDetailsScreen(viewModel: RingViewModel) {
+fun RingDetailsScreen(viewModel: RingViewModel, orientationViewModel: OrientationViewModel) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val isMeasuring = state is RingUiState.Measuring
+    val orientationLocked by orientationViewModel.locked.collectAsStateWithLifecycle()
     val listState = rememberScalingLazyListState()
 
     ScalingLazyColumn(
@@ -64,6 +66,15 @@ fun RingDetailsScreen(viewModel: RingViewModel) {
                     }
                 }
             }
+        }
+
+        item { Text("Orientation", color = MaterialTheme.colorScheme.onBackground) }
+        item { DetailButton(onClick = orientationViewModel::reset, modifier = Modifier.fillMaxWidth()) { Text("Reset orientation") } }
+        item {
+            DetailButton(
+                onClick = { orientationViewModel.setLocked(!orientationLocked) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (orientationLocked) "Unlock orientation" else "Lock orientation") }
         }
     }
 }

@@ -138,12 +138,6 @@ class AnalyzerViewModel(private val container: AppContainer, private val session
         republish()
     }
 
-    fun moveCursor(deltaBands: Int) {
-        userMovedCursor = true
-        cursorBandIndex = (cursorBandIndex + deltaBands).coerceIn(0, RadialMapping.DISPLAY_BAND_COUNT - 1)
-        republish()
-    }
-
     /** [arcFraction] is 0..1 along the arc, as resolved from a tap's angle by the screen/canvas. */
     fun setCursorArcFraction(arcFraction: Float) {
         userMovedCursor = true

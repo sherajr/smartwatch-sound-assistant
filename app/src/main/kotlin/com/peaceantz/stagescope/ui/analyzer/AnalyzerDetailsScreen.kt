@@ -15,12 +15,14 @@ import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
 import com.peaceantz.stagescope.AppContainer
 import com.peaceantz.stagescope.ui.components.DetailButton
+import com.peaceantz.stagescope.ui.rotation.OrientationViewModel
 import com.peaceantz.stagescope.ui.settings.SettingsViewModel
 
 @Composable
 fun AnalyzerDetailsScreen(
     container: AppContainer,
     viewModel: AnalyzerViewModel,
+    orientationViewModel: OrientationViewModel,
     onOpenCalibration: () -> Unit,
     onOpenSnapshots: () -> Unit,
     onOpenAppearance: () -> Unit,
@@ -29,6 +31,7 @@ fun AnalyzerDetailsScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
+    val orientationLocked by orientationViewModel.locked.collectAsStateWithLifecycle()
     val listState = rememberScalingLazyListState()
 
     ScalingLazyColumn(
@@ -63,6 +66,7 @@ fun AnalyzerDetailsScreen(
         } else {
             item { InfoLine("Status", "Not currently measuring") }
         }
+        item { InfoLine("Level meter range", LevelMeterScale.rangeLabel(isCalibrated = reading?.isCalibrated == true)) }
 
         item {
             DetailButton(onClick = viewModel::saveSnapshot, enabled = reading?.spectrum != null, modifier = Modifier.fillMaxWidth()) {
@@ -99,6 +103,22 @@ fun AnalyzerDetailsScreen(
 
         item { DetailButton(onClick = onOpenAppearance, modifier = Modifier.fillMaxWidth()) { Text("Appearance") } }
         item { DetailButton(onClick = onOpenWatchShortcuts, modifier = Modifier.fillMaxWidth()) { Text("Watch shortcuts") } }
+
+        item { Text("Orientation", color = MaterialTheme.colorScheme.onBackground) }
+        item {
+            Text(
+                "Turn the crown to rotate the whole instrument to whatever angle is easiest to read " +
+                    "from your wrist. Shared across Analyzer, Ring, and this screen.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        item { DetailButton(onClick = orientationViewModel::reset, modifier = Modifier.fillMaxWidth()) { Text("Reset orientation") } }
+        item {
+            DetailButton(
+                onClick = { orientationViewModel.setLocked(!orientationLocked) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (orientationLocked) "Unlock orientation" else "Lock orientation") }
+        }
     }
 }
 

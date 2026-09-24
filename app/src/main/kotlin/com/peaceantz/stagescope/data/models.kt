@@ -29,6 +29,10 @@ data class AppSettings(
     val dimAppearanceEnabled: Boolean = false,
     val ringAutoHoldSeconds: Int = 20,
     val theme: AppTheme = AppTheme.PHOSPHOR_GREEN,
+    /** The settled crown-driven rotation angle (see `ui/rotation/OrientationViewModel`), normalized
+     *  to [0, 360) -- written only after rotation pauses for a moment, never per crown tick. */
+    val instrumentOrientationDegrees: Float = 0f,
+    val instrumentOrientationLocked: Boolean = false,
 )
 
 /** A saved SPECTRUM snapshot with enough metadata to judge whether a comparison is valid. */

@@ -55,6 +55,18 @@ class SettingsRepository(context: Context) {
         persist(updated)
     }
 
+    suspend fun setInstrumentOrientation(degrees: Float) {
+        val updated = _settings.value.copy(instrumentOrientationDegrees = degrees)
+        _settings.value = updated
+        persist(updated)
+    }
+
+    suspend fun setInstrumentOrientationLocked(locked: Boolean) {
+        val updated = _settings.value.copy(instrumentOrientationLocked = locked)
+        _settings.value = updated
+        persist(updated)
+    }
+
     suspend fun setCalibration(calibration: CalibrationState?) {
         val updated = _settings.value.copy(calibration = calibration)
         _settings.value = updated
