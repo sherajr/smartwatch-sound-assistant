@@ -22,7 +22,7 @@ object StageScopeType {
 
     /** The Analyzer dial's compact cursor readout -- deliberately smaller than [frequencySp]: it
      *  shares the dial's tight inner "safe zone" with the primary reading, unit, and tags. */
-    val compactReadoutSp = 16.sp
+    val compactReadoutSp = 12.sp
 
     /** Secondary metrics (PK/MAX/AVG, units, status text). Spec range: 12-14sp. */
     val secondarySp = 13.sp
@@ -47,7 +47,12 @@ fun frequencyStyle(): TextStyle = MaterialTheme.typography.numeralMedium.copy(fo
 
 @Composable
 @ReadOnlyComposable
-fun compactReadoutStyle(): TextStyle = MaterialTheme.typography.numeralMedium.copy(fontSize = StageScopeType.compactReadoutSp)
+fun compactReadoutStyle(): TextStyle = MaterialTheme.typography.labelSmall.copy(
+    fontSize = StageScopeType.compactReadoutSp,
+    // Copying numeralMedium's font size alone retained its much taller line box, pushing the
+    // cursor line down into the narrowing chord of the spectrum even when the glyphs fitted.
+    lineHeight = 14.sp,
+)
 
 @Composable
 @ReadOnlyComposable

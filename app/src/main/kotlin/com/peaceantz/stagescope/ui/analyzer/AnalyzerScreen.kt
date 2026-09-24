@@ -1,6 +1,5 @@
 package com.peaceantz.stagescope.ui.analyzer
 
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -12,14 +11,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -33,6 +28,7 @@ import com.peaceantz.stagescope.ui.components.KeepScreenOnEffect
 import com.peaceantz.stagescope.ui.components.PrimaryActionRow
 import com.peaceantz.stagescope.ui.components.StateBadge
 import com.peaceantz.stagescope.ui.components.rememberAudioPermissionRequester
+import com.peaceantz.stagescope.ui.rotation.rotaryOrientation
 import com.peaceantz.stagescope.ui.theme.LocalStageScopePalette
 import com.peaceantz.stagescope.ui.theme.StageScopePalette
 import com.peaceantz.stagescope.ui.theme.chartAnnotationStyle
@@ -68,19 +64,11 @@ fun AnalyzerScreen(
     KeepScreenOnEffect(enabled = isMeasuring)
 
     val palette = LocalStageScopePalette.current
-    val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) { focusRequester.requestFocus() }
-
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .graphicsLayer { rotationZ = angleDegrees }
-            .focusRequester(focusRequester)
-            .focusable()
-            .onRotaryScrollEvent { event ->
-                if (!orientationLocked) onRotaryDelta(event.verticalScrollPixels)
-                true
-            },
+            .rotaryOrientation(locked = orientationLocked, onRotaryDelta = onRotaryDelta),
         contentAlignment = Alignment.Center,
     ) {
         val usableRadiusDp = min(maxWidth.value, maxHeight.value) / 2f
