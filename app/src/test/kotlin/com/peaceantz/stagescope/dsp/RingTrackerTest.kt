@@ -216,10 +216,37 @@ class RingTrackerTest {
         val tracker = RingTracker(clock = clock, settings = RingTrackerSettings(autoHoldMs = 1000))
         val confirmed = feedSteady(tracker, clock, bin = 150, totalMs = 400)
         tracker.pin(confirmed.heroCapture!!.id)
-        tracker.unpin()
+        tracker.unpin(confirmed.heroCapture!!.id)
         clock.advance(1500)
         val afterExpiry = tracker.update(silence())
         assertNotEquals("expired unpinned capture should no longer read as pinned", RingCaptureState.PINNED, afterExpiry.heroState)
+    }
+
+    @Test
+    fun `pinning one capture leaves every other capture's pin state untouched`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        var last: RingSnapshot? = null
+        var elapsed = 0L
+        while (elapsed < 400) {
+            last = tracker.update(frame(100 to -30.0, 200 to -30.0, 300 to -30.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        val ids = last!!.history.map { it.id }.sorted()
+        assertEquals(3, ids.size)
+
+        tracker.pin(ids[0])
+        tracker.pin(ids[1])
+        var snap = tracker.currentSnapshot()
+        assertTrue(snap.history.first { it.id == ids[0] }.pinned)
+        assertTrue(snap.history.first { it.id == ids[1] }.pinned)
+        assertFalse(snap.history.first { it.id == ids[2] }.pinned)
+
+        tracker.unpin(ids[0])
+        snap = tracker.currentSnapshot()
+        assertFalse("unpinning one capture must not affect another", snap.history.first { it.id == ids[0] }.pinned)
+        assertTrue("unrelated pin must survive an unpin elsewhere", snap.history.first { it.id == ids[1] }.pinned)
     }
 
     @Test
@@ -318,7 +345,373 @@ class RingTrackerTest {
         assertTrue("both tones should be present in history", final.history.size >= 1)
     }
 
-    private fun assertNotEquals(message: String, unexpected: Any, actual: Any) {
+    // --- Five-slot capture bank ---
+
+    @Test
+    fun `five simultaneous well-separated tones fill all five bank slots`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        var last: RingSnapshot? = null
+        var elapsed = 0L
+        while (elapsed < 400) {
+            last = tracker.update(frame(50 to -30.0, 100 to -30.0, 150 to -30.0, 200 to -30.0, 250 to -30.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        assertEquals(5, last!!.history.size)
+        assertEquals(5, last.slotsUsed)
+        assertEquals(5, last.slotsTotal)
+        val freqs = last.history.map { it.frequencyHz }.sorted()
+        assertEquals(listOf(500.0, 1000.0, 1500.0, 2000.0, 2500.0), freqs)
+    }
+
+    @Test
+    fun `five sequential captures each occupy their own slot`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        val bins = listOf(50, 100, 150, 200, 250)
+        for (bin in bins) {
+            feedSteady(tracker, clock, bin = bin, totalMs = 400)
+            clock.advance(20)
+            tracker.update(silence())
+        }
+        val snap = tracker.currentSnapshot()
+        assertEquals(5, snap.history.size)
+        assertEquals(bins.map { it * binWidth }.sorted(), snap.history.map { it.frequencyHz }.sorted())
+    }
+
+    @Test
+    fun `a sixth weaker candidate does not evict an existing unpinned live capture`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        val bins = listOf(50, 100, 150, 200, 250)
+        var last: RingSnapshot? = null
+        var elapsed = 0L
+        // Fill all five slots and keep feeding them (still LIVE, not expired) while a 6th,
+        // similar-strength tone tries to confirm.
+        while (elapsed < 800) {
+            last = tracker.update(frame(50 to -30.0, 100 to -30.0, 150 to -30.0, 200 to -30.0, 250 to -30.0, 350 to -31.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        assertEquals("weaker 6th candidate must not evict a live, unpinned slot", 5, last!!.history.size)
+        assertFalse(last.history.any { it.frequencyHz == 3500.0 })
+    }
+
+    @Test
+    fun `a sixth sufficiently stronger candidate evicts the weakest unpinned capture`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock, settings = RingTrackerSettings(replacementMarginDb = 6.0))
+        var last: RingSnapshot? = null
+        var elapsed = 0L
+        // Slot at bin 250 is deliberately the weakest (lowest contrast); others much stronger.
+        while (elapsed < 400) {
+            last = tracker.update(frame(50 to -20.0, 100 to -20.0, 150 to -20.0, 200 to -20.0, 250 to -35.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        assertEquals(5, last!!.history.size)
+
+        elapsed = 0L
+        while (elapsed < 400) {
+            // New tone at bin 350 much stronger than the weakest existing (250 at -35dB contrast).
+            last = tracker.update(frame(50 to -20.0, 100 to -20.0, 150 to -20.0, 200 to -20.0, 250 to -35.0, 350 to -15.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        assertEquals("bank must stay at 5 slots, never temporarily exceeding it", 5, last!!.history.size)
+        assertTrue("new sufficiently-stronger tone should have claimed a slot", last.history.any { it.frequencyHz == 3500.0 })
+        assertFalse("weakest prior candidate should have been evicted", last.history.any { it.frequencyHz == 2500.0 })
+    }
+
+    @Test
+    fun `expired unpinned capture is evicted before considering prominence margin`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock, settings = RingTrackerSettings(autoHoldMs = 500, replacementMarginDb = 6.0))
+        var elapsed = 0L
+        var last: RingSnapshot? = null
+        while (elapsed < 400) {
+            last = tracker.update(frame(50 to -20.0, 100 to -20.0, 150 to -20.0, 200 to -20.0, 250 to -20.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        assertEquals(5, last!!.history.size)
+
+        clock.advance(1000) // every capture now expired (well past autoHoldMs)
+        tracker.update(silence())
+
+        // A single new, even weaker tone should still claim a slot because the target is expired,
+        // not because it out-prominences anything.
+        feedSteady(tracker, clock, bin = 350, totalMs = 400)
+        val after = tracker.currentSnapshot()
+        assertEquals(5, after.history.size)
+        assertTrue(after.history.any { it.frequencyHz == 3500.0 })
+    }
+
+    @Test
+    fun `when all five slots are pinned a new tone cannot claim a slot`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        var last: RingSnapshot? = null
+        var elapsed = 0L
+        while (elapsed < 400) {
+            last = tracker.update(frame(50 to -20.0, 100 to -20.0, 150 to -20.0, 200 to -20.0, 250 to -20.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        for (capture in last!!.history) tracker.pin(capture.id)
+        val pinnedSnap = tracker.currentSnapshot()
+        assertTrue(pinnedSnap.allSlotsPinned)
+
+        elapsed = 0L
+        var afterNew: RingSnapshot? = null
+        while (elapsed < 400) {
+            afterNew = tracker.update(frame(50 to -20.0, 100 to -20.0, 150 to -20.0, 200 to -20.0, 250 to -20.0, 350 to -5.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        assertEquals("all-pinned bank must stay exactly at capacity", 5, afterNew!!.history.size)
+        assertFalse(afterNew.history.any { it.frequencyHz == 3500.0 })
+        assertTrue(afterNew.allSlotsPinned)
+    }
+
+    @Test
+    fun `clear unpinned removes only unpinned captures`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        var last: RingSnapshot? = null
+        var elapsed = 0L
+        while (elapsed < 400) {
+            last = tracker.update(frame(100 to -30.0, 200 to -30.0, 300 to -30.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        val ids = last!!.history.map { it.id }.sorted()
+        tracker.pin(ids[0])
+
+        tracker.clearUnpinned()
+        val after = tracker.currentSnapshot()
+        assertEquals(1, after.history.size)
+        assertEquals(ids[0], after.history[0].id)
+        assertTrue(after.history[0].pinned)
+    }
+
+    // --- Resolution-aware dedup tolerance ---
+
+    @Test
+    fun `recurring-tone dedup tolerance scales with actual bin width, not a fixed Hz assumption`() {
+        val clock = FakeClock()
+        // dedupToleranceBins=6 at binWidth=10Hz -> 60Hz window. A recurrence 45Hz away (4.5 bins)
+        // should merge into the same record; this only holds if the tolerance is computed from the
+        // frame's real binWidthHz rather than a hardcoded constant.
+        val tracker = RingTracker(clock = clock, settings = RingTrackerSettings(dedupToleranceBins = 6))
+        feedSteady(tracker, clock, bin = 150, totalMs = 400) // confirms at 1500 Hz
+        clock.advance(300)
+        tracker.update(silence())
+        val again = feedSteady(tracker, clock, bin = 155, totalMs = 400) // 1550 Hz, 50Hz / 5 bins away
+        assertEquals("a recurrence within the resolution-aware tolerance must dedupe", 1, again.history.size)
+    }
+
+    // --- Most-prominent-ring selection (independent of manual selection and pins) ---
+
+    @Test
+    fun `most prominent ring is the strongest live capture regardless of manual selection`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        var last: RingSnapshot? = null
+        var elapsed = 0L
+        while (elapsed < 400) {
+            last = tracker.update(frame(100 to -10.0, 300 to -30.0)) // bin 100 much louder
+            clock.advance(20)
+            elapsed += 20
+        }
+        val loudId = last!!.history.first { it.frequencyHz == 1000.0 }.id
+        val quietId = last.history.first { it.frequencyHz == 3000.0 }.id
+
+        // Manually select the quieter one -- must not change which ring is "most prominent".
+        tracker.selectCapture(quietId)
+        val snap = tracker.currentSnapshot()
+        assertEquals(quietId, snap.heroCapture!!.id)
+        assertEquals("most-prominent must track spectral strength, not the manual selection", loudId, snap.mostProminentCaptureId)
+    }
+
+    @Test
+    fun `pinning a weaker ring does not let it outrank a stronger live ring`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        var last: RingSnapshot? = null
+        var elapsed = 0L
+        while (elapsed < 400) {
+            last = tracker.update(frame(100 to -10.0, 300 to -30.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        val loudId = last!!.history.first { it.frequencyHz == 1000.0 }.id
+        val quietId = last.history.first { it.frequencyHz == 3000.0 }.id
+        tracker.pin(quietId)
+
+        elapsed = 0L
+        var snap: RingSnapshot? = null
+        while (elapsed < 400) {
+            snap = tracker.update(frame(100 to -10.0, 300 to -30.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        assertEquals("pinning must not make a weaker ring outrank a stronger one", loudId, snap!!.mostProminentCaptureId)
+    }
+
+    @Test
+    fun `most prominent switches immediately when a clearly stronger ring appears`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock, settings = RingTrackerSettings(prominenceSwitchMarginDb = 4.0, prominenceDwellMs = 600))
+        var elapsed = 0L
+        var snap: RingSnapshot? = null
+        while (elapsed < 400) {
+            snap = tracker.update(frame(100 to -30.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        val firstId = snap!!.history.first().id
+        assertEquals(firstId, snap.mostProminentCaptureId)
+
+        // A much stronger tone appears alongside it. Give it enough continuous frames to pass the
+        // separate 350ms ring-CONFIRMATION dwell and become LIVE -- only once it's a real,
+        // currently-detected capture does the "switch promptly" (no EXTRA hysteresis dwell) rule
+        // apply; confirmation itself is not something prominence hysteresis can or should skip.
+        elapsed = 0L
+        while (elapsed < 400) {
+            snap = tracker.update(frame(100 to -30.0, 300 to -5.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        assertNotEquals(
+            "a clearly stronger, already-confirmed ring must take over promptly, without an extra hysteresis dwell",
+            firstId,
+            snap!!.mostProminentCaptureId,
+        )
+    }
+
+    @Test
+    fun `most prominent requires a dwell before switching to a near-equal candidate`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(
+            clock = clock,
+            settings = RingTrackerSettings(prominenceSwitchMarginDb = 4.0, prominenceDwellMs = 600, prominenceEmaAlpha = 1.0),
+        )
+        var elapsed = 0L
+        var snap: RingSnapshot? = null
+        while (elapsed < 400) {
+            snap = tracker.update(frame(100 to -20.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        val firstId = snap!!.history.first().id
+        assertEquals(firstId, snap.mostProminentCaptureId)
+
+        // A near-equal-strength second tone (within the switch margin) appears and is fed long
+        // enough to confirm and become LIVE, competing on equal footing -- right as it becomes
+        // eligible, it must not have stolen the top spot yet (the hysteresis dwell just started).
+        elapsed = 0L
+        while (elapsed < 400) {
+            snap = tracker.update(frame(100 to -20.0, 300 to -19.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        assertEquals("a near-equal candidate must not switch instantly", firstId, snap!!.mostProminentCaptureId)
+
+        // Keep both live long enough for the dwell to elapse.
+        elapsed = 0L
+        while (elapsed < 700) {
+            snap = tracker.update(frame(100 to -20.0, 300 to -19.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        assertNotEquals("after the dwell, the near-equal candidate should take over", firstId, snap!!.mostProminentCaptureId)
+    }
+
+    @Test
+    fun `most prominent is retained as cached info once acquisition goes quiet`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        var elapsed = 0L
+        var snap: RingSnapshot? = null
+        while (elapsed < 400) {
+            snap = tracker.update(frame(100 to -20.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        val id = snap!!.mostProminentCaptureId
+        assertNotNull(id)
+
+        clock.advance(1000) // goes HELD (past maxDropoutMs), well within autoHold
+        val after = tracker.update(silence())
+        assertEquals("last known most-prominent id should be retained even once nothing is LIVE", id, after.mostProminentCaptureId)
+        val cachedCapture = after.history.first { it.id == id }
+        assertEquals(RingCaptureState.HELD, cachedCapture.stateAt(clock.nowMillis(), tracker.settings.autoHoldMs, tracker.settings.maxDropoutMs))
+    }
+
+    @Test
+    fun `clearing the most prominent capture releases the cached id`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        var elapsed = 0L
+        var snap: RingSnapshot? = null
+        while (elapsed < 400) {
+            snap = tracker.update(frame(100 to -20.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        val id = snap!!.mostProminentCaptureId!!
+        tracker.selectCapture(id)
+        tracker.clearSelected()
+        val after = tracker.currentSnapshot()
+        assertNull(after.mostProminentCaptureId)
+    }
+
+    // --- Restore from disk ---
+
+    @Test
+    fun `a restored capture is pinned and marked restored until detected again`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        tracker.restoreCapture(id = 42L, frequencyHz = 630.0, savedAtWallClockMillis = 123_456L)
+        val snap = tracker.currentSnapshot()
+        assertEquals(1, snap.history.size)
+        val restored = snap.history[0]
+        assertEquals(42L, restored.id)
+        assertTrue(restored.pinned)
+        assertTrue(restored.restoredFromDisk)
+        assertEquals(RingCaptureState.PINNED, restored.stateAt(clock.nowMillis(), tracker.settings.autoHoldMs, tracker.settings.maxDropoutMs))
+    }
+
+    @Test
+    fun `a restored capture's identity survives and clears its restored flag once detected again`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        tracker.restoreCapture(id = 42L, frequencyHz = 1500.0, savedAtWallClockMillis = 1L)
+
+        // A real detection near that same frequency (bin 150 * binWidth(10) = 1500Hz) must update
+        // the SAME restored record (via dedup), not create a second one with a new, colliding id.
+        feedSteady(tracker, clock, bin = 150, totalMs = 400)
+        val snap = tracker.currentSnapshot()
+        assertEquals("must not duplicate a restored capture on rediscovery", 1, snap.history.size)
+        assertEquals(42L, snap.history[0].id)
+        assertFalse("no longer just a disk-restored record once actually redetected", snap.history[0].restoredFromDisk)
+    }
+
+    @Test
+    fun `restored ids never collide with a freshly confirmed capture's id`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        tracker.restoreCapture(id = 1L, frequencyHz = 9000.0, savedAtWallClockMillis = 1L)
+        // A brand-new, unrelated tone must get its own distinct id, never colliding with id 1.
+        val snap = feedSteady(tracker, clock, bin = 150, totalMs = 400)
+        assertEquals(2, snap.history.size)
+        val ids = snap.history.map { it.id }
+        assertEquals(ids.size, ids.toSet().size)
+    }
+
+    private fun assertNotEquals(message: String, unexpected: Any?, actual: Any?) {
         assertFalse(message, unexpected == actual)
     }
 }

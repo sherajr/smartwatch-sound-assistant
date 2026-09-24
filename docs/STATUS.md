@@ -1,196 +1,203 @@
 # Status
 
-## Done (this pass — app logo)
-Replaced the placeholder system icon (`@android:drawable/ic_btn_speak_now`) with a real logo the
-user supplied (ring + level-meter bars in the app's own live-green/held-red, matching
-`StageScopeColors` exactly). Source was a flat PNG on a black background; de-matted it
-programmatically (per-pixel `alpha = max(r,g,b)`, then unpremultiplied) into a clean transparent
-master (`docs/stagescope_logo.png`) rather than using the user's own transparent export, which had
-visible edge-fringing artifacts.
-- **Launcher icon**: proper adaptive icon (`mipmap-anydpi-v26/ic_launcher.xml` +
-  `ic_launcher_round.xml`, `@color/ic_launcher_background` = black, foreground PNGs at all 5
-  densities in `mipmap-{m,h,x,xx,xxx}hdpi/ic_launcher_foreground.png`, content scaled to 62% of the
-  108dp canvas so it survives any mask crop) plus a `<monochrome>` variant for Android 13+ themed
-  icons, reusing the same white silhouette made for the complication.
-- **Complication/Tile assets restyled from the same source**: `ic_stagescope_mono.png` (white
-  silhouette, required for the complication's `android:icon`/`MonochromaticImage` since those must
-  be single-color) replaces the earlier hand-drawn placeholder vector bars; `ic_stagescope_logo.png`
-  (full color, no white-only requirement for Tiles) replaces it for the Tile service's own
-  `android:icon` and `androidx.wear.tiles.PREVIEW` metadata.
-- All raster assets generated with a small one-off Java/`ImageIO` program (no ImageMagick/PIL
-  available in this environment) rather than hand-authored, so they're pixel-accurate derivatives
-  of the actual supplied logo, not an approximation.
-- **Lint-driven fixes**: the Tile preview PNG had to be ≥384×384px (was 288, lint caught it, bumped
-  to 432); `SquareAndRoundTilePreviews` wants the Tile preview in both `drawable-round` and
-  `drawable` variants (used `drawable-round-nodpi`/`drawable-nodpi` to also satisfy the separate
-  `IconLocation` densityless-folder check). Tried renaming `mipmap-anydpi-v26` → `mipmap-anydpi`
-  per lint's `ObsoleteSdkInt` suggestion (minSdk 30 already implies v26+) — this pinned AGP/aapt2
-  toolchain doesn't accept the unqualified folder for an adaptive-icon XML (`resource mipmap/
-  ic_launcher not found`), so reverted; left as one accepted warning rather than break the build.
-- **Checks**: `assembleDebug`/`lintDebug`/`testDebugUnitTest` all green — **0 lint errors, 12
-  warnings** (10 pre-existing + the one reverted `ObsoleteSdkInt` + one `IconDuplicatesConfig`,
-  correctly flagging that the round/square Tile preview are intentionally identical), **49/49
-  tests**. Installed on the watch; confirmed via `adb shell am start
-  -a android.settings.APPLICATION_DETAILS_SETTINGS` that the app still launches correctly and shows
-  its label under the new manifest icon attributes (`docs/screenshots/app_icon_check.png`) — **did
-  not get a clean live screenshot of the icon itself** in the app drawer/launcher grid; this Wear OS
-  build doesn't expose that screen to simple scripted `adb shell input` navigation (tried `KEYCODE_
-  APP_SWITCH`/recents, the settings app-info page, home; none surfaced it). The icon's actual pixels
-  were verified instead by compositing the generated PNGs onto black locally before installing
-  (clean, well-centered, no clipping at any density) — real, but not the same as seeing it rendered
-  by the watch's own launcher.
+## Done (this pass — polished redesign: combined Analyzer, themes, guided calibration, 5-ring bank, prominence-based complication)
 
-## Done (this pass — Tile + watch-face complication)
-- **Implementation choice**: stable Tiles + ProtoLayout, not a separate "Wear Widgets" stack. The
-  connected Pixel Watch 5 (API 37, Wear system build 1.35.84) runs
-  `com.google.android.wearable.protolayout.renderer` and its own `gridlauncher` as the Tile
-  carousel host, confirming Tiles/ProtoLayout is the live rendering pipeline on real hardware, not
-  a legacy shim. `androidx.wear.tiles.TileService` remains the system-binding contract; the actual
-  layout is built with `androidx.wear.protolayout` + `androidx.wear.protolayout.material3` (stable
-  1.4.2 — `primaryLayout`, `textDataCard`, `buttonGroup`/`compactButton`, `textEdgeButton`), which
-  reuses `StageScopeColors` directly as a `ColorScheme`. One Tile, one carousel entry — no
-  duplicate Tile/Widget registration.
-- **StageScope Tile** (`widget/tile/StageScopeTileService.kt`): header text, a compact data card
-  with the last saved RMS reading (exact value + unit, "Last reading · <time>"), a one-line ring
-  summary ("PINNED · 326 Hz" / "Last ring · …", omitted entirely — not em-dashed — when there's no
-  saved ring), a 2-button `buttonGroup` (SPECTRUM/RING shortcuts), and a bottom `textEdgeButton`
-  ("MEASURE") as the one prominent action — never 3 buttons in a row. Empty state shows "Ready to
-  measure" instead of the card. Timestamps use `widget/WidgetFormatting.kt`'s `formatWhen` (clock
-  time same-day, date otherwise) so a cached render never silently shows a stale "x seconds ago".
-- **StageScope complication** (`widget/complication/StageScopeComplicationService.kt`): SHORT_TEXT
-  ("326Hz"/"2.2kHz" + "PIN"/"LAST" title, kept under the SHORT_TEXT length limit) and
-  MONOCHROMATIC_IMAGE, both sourced from the same pinned-else-last-seen ring summary. No-data state
-  shows a plain "StageScope"/mark + opens LEVEL (never starts the mic). Accessible descriptions
-  spell out the full frequency, pinned/last status, and save time.
-- **Shared summary, not a second database** (`data/SurfaceSummary.kt` + `SurfaceSummaryRepository`):
-  same plain-JSON-in-`filesDir` pattern as `SettingsRepository`/`SnapshotRepository`. Written only
-  at meaningful events — `LevelViewModel` on Stop (skipped entirely for demo-mode readings),
-  `RingViewModel` when the pinned-or-most-recent capture's *identity* changes (a new confirm, a
-  pin/unpin, a clear) — diffed against the last-persisted id+pinned key so a live stream of
-  detector updates at the existing ~10 Hz UI cadence never turns into continuous writes or provider
-  updates. `RingTracker` itself is untouched; the ViewModel only reads `RingSnapshot.history`.
-  `widget/SurfaceUpdateNotifier.kt` calls `TileService.getUpdater(...).requestUpdate(...)` and
-  `ComplicationDataSourceUpdateRequester.requestUpdateAll()` right after each write.
-- **Entry-point routing, once each** (`ui/nav/ShortcutIntents.kt`, `MainActivity.kt`,
-  `StageScopeNavHost.kt`): Tile/complication taps carry a `EXTRA_SHORTCUT` string extra (a Tile's
-  declarative `ActionBuilders.launchAction` can only specify package/class/extras, not a custom
-  Intent action, so both surfaces route through the same extra-based contract rather than distinct
-  actions). `MainActivity` only reads the launch intent when `savedInstanceState == null` — Android's
-  own signal that this is a genuinely fresh creation, not a rotation or a process-death respawn
-  replaying the same stale `Intent`; a real re-tap always arrives through `onNewIntent`, which is
-  unconditionally honored. The nav host applies the request (pager page, optional Measure-start via
-  the existing `rememberAudioPermissionRequester` path — same permission flow the in-app Start
-  button uses — optional Ring capture re-selection) in one `LaunchedEffect` keyed on a per-delivery
-  id, then clears it. Reusing an already-running session, preserving Spectrum/Ring's cursor and
-  selection, and never auto-starting the mic from a bare "open" tap all fall out of this without
-  special-casing, because `CaptureSession.start()`/`RingTracker.selectCapture()` were already
-  idempotent/no-op-safe.
-- **"Watch shortcuts" help screen** (`ui/help/WatchShortcutsHelpScreen.kt`): static instructions for
-  the manual "swipe to the Tile carousel → Add" and "long-press watch face → Edit → complication
-  slot" steps, reachable from LEVEL's Details screen. There is no public system API for an app to
-  pin its own Tile or become a chosen complication automatically.
-- Both services' manifest `android:icon` and the Tile's `androidx.wear.tiles.PREVIEW` metadata
-  drawable originally pointed at a hand-drawn placeholder vector mark; both now use the real logo
-  assets described in the "app logo" section above (`ic_stagescope_mono`/`ic_stagescope_logo`).
-- Manifest: both services declared `exported="true"` with the correct system-only bind permissions
-  (`BIND_TILE_PROVIDER` / `BIND_COMPLICATION_PROVIDER`), correct intent-filter actions, and
-  `SUPPORTED_TYPES=SHORT_TEXT,ICON` + `UPDATE_PERIOD_SECONDS=0` (no polling — updates are pushed
-  explicitly by `SurfaceUpdateNotifier`, matching the "no per-second polling" requirement).
-- New pinned dependencies (`app/build.gradle.kts`): `androidx.wear.tiles:tiles`/`tiles-material`
-  1.6.2, `androidx.wear.protolayout:protolayout`/`protolayout-material3` 1.4.2,
-  `androidx.wear.watchface:watchface-complications-data-source-ktx` 1.3.0,
-  `androidx.concurrent:concurrent-futures` 1.3.0, and `com.google.guava:guava:33.7.1-android`. The
-  guava dependency is a non-obvious requirement: Tiles' `onTileRequest` returns
-  `com.google.common.util.concurrent.ListenableFuture`, and without real Guava on the classpath,
-  Guava's own published Gradle metadata substitutes the lightweight `listenablefuture:1.0` stub with
-  an intentionally *empty* artifact (`9999.0-empty-to-avoid-conflict-with-guava`), so the type fails
-  to resolve at all — a known Gradle/Guava interop gotcha, not something specific to this project.
+A full redesign per the updated brief: combined Level+Spectrum into one circular ANALYZER page,
+added 5 selectable color themes + Dim, replaced the calibration controls with a guided 4-step flow,
+reworked Ring into an independently-pinnable 5-slot capture bank, and changed the watch-face
+complication to show the most prominent currently-confirmed ring instead of "pinned, else most
+recent." Preserved the existing audio pipeline, `CaptureSession` sharing, DSP invariants, and watch
+shortcut/installation workflow throughout — see `git log`/prior revisions of this file for the two
+earlier passes (visual redesign + Ring rework; app logo + Tile/complication) this one builds on.
 
-## Checks run this session
-- `gradlew testDebugUnitTest` → BUILD SUCCESSFUL, **49/49 passed** (the prior 43 DSP/RingTracker
-  tests, unchanged and unaffected, plus 6 new `WidgetFormattingTest` cases covering the same-day/
-  older-date branch of `formatWhen`, the SHORT_TEXT 7-character budget and exact rounding of
-  `formatFrequencyCompact`, `formatFrequencyReadable`, and `formatDbCompact`'s explicit sign).
-- `gradlew lintDebug` → BUILD SUCCESSFUL, **0 errors**, 12 warnings — the same 10 pre-existing ones
-  (Gradle/dependency freshness, `allowBackup` deprecation, missing `taskAffinity`) plus 2 from the
-  app-logo work, both accepted deliberately (see that section): one `ObsoleteSdkInt` on
-  `mipmap-anydpi-v26` that can't actually be fixed on this pinned toolchain, one
-  `IconDuplicatesConfig` correctly noting the round/square Tile preview are intentionally identical.
+### 1. Combined circular Analyzer (`ui/analyzer/`)
+- New `ModePage` order: ANALYZER → RING (was LEVEL → SPECTRUM → RING). `AnalyzerViewModel` merges
+  what were separate `LevelViewModel`/`SpectrumViewModel` onto the one shared `CaptureSession` —
+  same throttled ~10Hz publish, same keep-awake countdown, same calibration-offset handling, same
+  Freeze-is-local (now spectrum-only, not page-swap-only) contract.
+- `RadialMapping.kt` — pure, zero-Compose-dependency geometry (unit-tested, `RadialMappingTest`):
+  logarithmic angle mapping over a 270° arc with a deliberate 90° gap at the bottom (where the two
+  action buttons sit), a fixed -90..0 dBFS radial scale (never autoscaled), and band aggregation
+  (2049 raw FFT bins → 56 display bands via **max**, not average, so narrow peaks survive; each band
+  records the real bin that produced its value, so a selected band's Hz and dB always match — the
+  old Spectrum page's readout mixed a dominant-frequency Hz with a differently-sourced cursor dB,
+  deliberately not repeated here).
+- `RadialSpectrumCanvas.kt` draws the annulus: sparse dB grid rings + frequency ticks, live bars,
+  a decaying peak-hold outline, a dashed comparison-snapshot outline, and a selection-cursor spoke —
+  four visually distinguishable elements. Tap the ring or turn the crown to move the cursor (auto-
+  follows the loudest band until the user interacts); `Modifier.pointerInput` computes the tap angle
+  and `RadialMapping.fractionForAngle` returns null for a tap inside the gap.
+- `AnalyzerDetailsScreen` carries PK/MAX/AVG, sample-rate/FFT/resolution info, Save/Snapshots, Clear
+  peak hold, Calibrate SPL, Demo toggle, Appearance, Watch shortcuts — moved out of the main dial
+  after on-device testing showed the center "safe zone" is too tight to hold that plus the primary
+  reading and frequency readout at once (see the on-device findings below).
+
+### 2. Five color themes + Dim (`ui/theme/Theme.kt`, `ui/settings/AppearanceScreen.kt`)
+- `StageScopePalette` (a data class of the same field names the old `StageScopeColors` object had)
+  + `StageScopePalettes` (Phosphor Green / Ice Cyan / Warm Amber / Violet / Night Red, each with a
+  contrasting live/held accent pair) + `LocalStageScopePalette` (CompositionLocal, provided by
+  `StageScopeTheme(theme, dimAppearance)`). Audited and moved every direct `StageScopeColors.X`
+  reference in a Composable context (`LevelBar`→removed as dead code once PK/MAX/AVG left the main
+  dial, `ActionControls`, `RingScreen`, `RingCapturesScreen`, `CalibrationScreen`, the new
+  `RadialSpectrumCanvas`) onto `LocalStageScopePalette.current`. The Tile builds its ProtoLayout
+  `ColorScheme` from the same palette + the persisted Dim flag (`stageScopeTileColorScheme`), so the
+  Tile visibly follows the in-app theme, not just the app's own buttons.
+- `AppSettings.theme: AppTheme` — a new field with a default (`PHOSPHOR_GREEN`), so an existing
+  install's `settings.json` (missing the key) decodes unchanged (`AppSettingsTest` verifies this
+  against a literal pre-this-pass JSON string, plus that unknown future keys don't break decoding).
+
+### 3. Guided calibration (`ui/settings/CalibrationViewModel.kt` + `CalibrationScreen.kt`)
+- Replaced the single free-form "dial in a target, Confirm" screen with 4 steps: **Prepare**
+  (explains calibration, "Use dBFS" to skip, an expandable "what this can't fix" note) → **Enter
+  reference reading** (crown/±, requires an explicit touch or an explicit "use shown value"
+  confirmation — an untouched example can't be silently saved as a real reading) → **Measure** (an
+  explicit "Measure reference" action, ~3s sampling with a live progress bar and clip/live-dB
+  feedback) → **Review/Save** (reference reading, measured raw level, resulting offset, Retry/Save)
+  → an explicit **success** screen ("Calibration saved. Level readings now show Estimated SPL.")
+  with Done back to Analyzer.
+- `dsp/CalibrationSampleAccumulator.kt` — pulled the energy-averaging math (the thing the old
+  ViewModel did inline, from a single latest block, per the brief's own critique) into a pure,
+  unit-tested class: accumulates energy across the whole ~3s window and converts to dB exactly once
+  (`CalibrationSampleAccumulatorTest` checks this against the same -9.03 dBFS invariant
+  `LevelMeterTest` uses, and that a loud block isn't washed out by a quiet one the way naive
+  dB-averaging would be), plus per-block dB spread (stability) and any-block clipping.
+- Save is rejected — with a stated reason, not just a disabled button — if the sample clipped, was
+  too variable (>6 dB per-block spread), is older than 90s, was taken in Demo mode, or the mic
+  configuration changed since measuring; re-checked at Save time, not just at measurement completion.
+
+### 4. Five-slot independently-pinnable Ring bank (`dsp/RingTracker.kt`, `ui/ring/`)
+- `RingTracker.pin(id)`/`unpin(id)`/`setPinned(id, Boolean)` replace the old exclusive
+  `pin(id)` (unpinned everything else)/`unpin()` (no-arg, cleared all pins) — any 0–5 of the 5 slots
+  can now be pinned independently. `clearUnpinned()` is new alongside the existing `clearSelected()`/
+  `clearAll()`.
+- `RingTrackerSettings.maxCaptures` (was `maxHistorySize`) defaults to 5, with deterministic,
+  tested capacity rules: fill empty slots first; never evict pinned; prefer an expired-unpinned slot;
+  otherwise only evict the weakest unpinned slot if the new tone is `replacementMarginDb` (6dB)
+  stronger (avoids churn); if all five are pinned the tone stays a live track but doesn't claim a
+  slot, and `RingSnapshot.allSlotsPinned` lets the UI say so plainly.
+- `confirm()`'s recurring-tone dedup tolerance is now resolution-aware
+  (`dedupToleranceBins × the frame's actual binWidthHz`, an explicit new settings field) instead of
+  the previous `matchToleranceBins × 4.0` — a hardcoded "4 Hz per bin" assumption the brief flagged.
+- New **most-prominent-ring selector** (`RingSnapshot.mostProminentCaptureId`): the strongest
+  currently-LIVE capture by EMA-smoothed spectral prominence, computed entirely independently of
+  `selectCapture`/pin state. Switches promptly to a clearly stronger candidate
+  (`prominenceSwitchMarginDb`, 4dB) but requires a near-equal candidate to lead for
+  `prominenceDwellMs` (600ms) first — hysteresis against flapping. Sticky when nothing is currently
+  live (returns the last id it held, so a caller can show "cached" info), cleared when that specific
+  capture is removed.
+- Pinned captures (id/frequency/save-time only, never audio) persist across restarts via the new
+  `data/RingBankRepository.kt` (`ring_bank.json`, same plain-JSON pattern as the other repositories)
+  and are replayed via `RingTracker.restoreCapture()` at `RingViewModel` startup — marked
+  `restoredFromDisk` (shown "SAVED" in the Captures list) until a live detection updates them again,
+  seeded so their ids never collide with a freshly-confirmed capture.
+- `RingScreen` gained a persistent "Captures N/5 ›" entry point (was only shown when ≥1 "other
+  candidate" existed); `RingCapturesScreen` now lists all 5 slots with per-row Select/Pin-Unpin,
+  "SAVED"/state labels, "Clear unpinned", and "Clear all" behind an explicit confirm step (armed by
+  one tap, executed by a second, cancellable) rather than a single-tap destructive action.
+- Added `RingCaptureState.EXPIRED` ("HISTORICAL" in the UI), separate from `HELD`, so an
+  auto-hold-expired-but-retained capture reads distinctly from one still within its hold window.
+
+### 5. Complication shows the most prominent ring, not "pinned, else last" (`widget/`, `RingViewModel`)
+- `RingViewModel.resolveComplicationCapture()` reads `RingSnapshot.mostProminentCaptureId` (falling
+  back to the strongest remaining historical capture if that id was since cleared) instead of the
+  old `pinned ?: mostRecentlySeen`. The diff key that gates writes to `SurfaceSummaryRepository`
+  (`captureId, pinned, frequencyHz`) is recomputed from this resolver on every published snapshot,
+  so a change driven purely by the audio stream — no Pin tap at all — still reaches the complication.
+- Complication/Tile wording changed to never claim liveness ("Last analyzed <time>", title "LAST"
+  always, a pinned note only as secondary detail) since they only ever read cached, disk-backed data
+  and must never imply the watch face is actively listening.
+- `ShortcutRequest.forShortcut` is now a pure function (`ui/nav/ShortcutIntents.kt`, no
+  `android.content.Intent` dependency) so the LEVEL/SPECTRUM→ANALYZER, MEASURE→ANALYZER+start, and
+  RING(+captureId) routing is directly unit-tested (`ShortcutRequestTest`) without Robolectric.
+  Existing Tile/complication `PendingIntent`s using the old `level`/`spectrum` shortcut strings keep
+  working unmodified, now landing on the combined Analyzer page.
+
+### On-device findings (Pixel Watch 5, API 37) — real bugs caught and fixed this pass
+- **Layout overlap in the Analyzer dial**: the first on-device render showed the primary RMS number,
+  unit label, and frequency readout genuinely overlapping the radial ring and each other, and the
+  selection-cursor spoke crossed straight through the center text. Root cause: the round-safe content
+  area between the title and button rows is noticeably shorter than it is wide, so a circular gauge
+  sized to that box's *height* leaves much less central "safe zone" than expected, especially once
+  PK/MAX/AVG chips were stacked in there too. Fixed by moving PK/MAX/AVG to Details, shrinking the
+  cursor-readout font (new `compactReadoutStyle()`), tightening the annulus inner/outer radii, and
+  capping the cursor spoke's inner reach at the bars' own `innerRadius` instead of reaching further
+  in. Re-verified on-device after the fix — clean, no overlap.
+- **A real navigation bug, not a test artifact**: a *second* Tile/complication-style shortcut tap
+  (`EXTRA_SHORTCUT` via `onNewIntent`) while the app was already open on a different page silently
+  failed to switch pages — confirmed via targeted logging that `onNewIntent` fired correctly and the
+  outer `StageScopeNavHost` recomposed with the new `pendingAction`, but the pager never scrolled.
+  Root cause: Wear Navigation composes `composable(ROUTE_MAIN) { ... }`'s content once per backstack
+  entry and doesn't re-invoke that closure just because the *enclosing* `StageScopeNavHost` function
+  recomposes with new parameter values — a closure over the raw `pendingAction` parameter kept
+  seeing the value from the very first composition. Fixed with `rememberUpdatedState(pendingAction)`
+  (and the same for `onPendingActionConsumed`), giving the inner `LaunchedEffect` a stable reference
+  that always reads the latest value. A fresh cold launch (the `onCreate` path) was never affected —
+  only a second tap while already running. Re-verified on-device after the fix, including with the
+  synthetic ring tone from Demo mode: Ring correctly showed LIVE/223Hz/prominence/2-of-5 captures
+  after navigating there mid-measurement.
+- **Synthetic touch input does not work on this device**: `adb shell input tap`/`swipe` never reach
+  the touchscreen driver (`getevent` during a synthetic tap shows zero events from `raydium_ts`,
+  confirmed both before and after trying `input touchscreen`, `monkey`, and held/long taps) — this is
+  a device/driver limitation, matching the *previous* session's own unresolved tap-through caveat for
+  the Tile, now confirmed to be a general adb-on-this-unit issue rather than something specific to
+  Tiles. Screens reachable only via a button tap (Calibration, Appearance, Ring Captures list,
+  Analyzer/Ring Details) could not be exercised interactively this pass; screens reachable via the
+  `EXTRA_SHORTCUT` intent contract, or by writing `files/settings.json` via `adb shell run-as` (to
+  flip Demo mode) plus `pm grant` for the mic permission, could — and were, including live and
+  demo-mode Analyzer and Ring rendering.
+
+### Checks run this session
+- `gradlew testDebugUnitTest` → BUILD SUCCESSFUL, **89/89 passed**: the 51 pre-existing DSP/data/
+  widget tests (`RingTrackerTest` rewritten for the new pin/unpin/eviction/most-prominent API, still
+  covering every prior behavior plus the new one) plus new suites —
+  `RadialMappingTest` (9, pure geometry/aggregation), `CalibrationSampleAccumulatorTest` (5, energy
+  averaging + stability/clip signals), `AppSettingsTest` (3, theme backward-compat/round-trip/
+  forward-compat), `ShortcutRequestTest` (6, shortcut→page routing incl. legacy LEVEL/SPECTRUM→
+  Analyzer), plus 17 new `RingTrackerTest` cases for the five-slot bank, independent pins, eviction
+  policy, resolution-aware dedup, most-prominent hysteresis/stickiness, and restore-from-disk.
+- `gradlew lintDebug` → BUILD SUCCESSFUL, **0 errors, 12 warnings** — the same 12 pre-existing ones
+  from the prior pass (Gradle/dependency freshness ×6, `allowBackup` deprecation, `ObsoleteSdkInt` on
+  `mipmap-anydpi-v26`, `IconDuplicatesConfig`, `WearRecents`, `NewerVersionAvailable`); no new
+  warnings introduced.
 - `gradlew assembleDebug` → BUILD SUCCESSFUL. APK: `app\build\outputs\apk\debug\app-debug.apk`
-  (~45 MB debug/unminified — up from the prior pass mainly due to Guava; not addressed this pass
-  since `isMinifyEnabled` is off for both build types already and enabling it is out of scope here).
-- Installed and launched on the same **Pixel Watch 5** (`adb-68041WRDTW60EA-jm8Zm0…`, API 37) used
-  last session. `adb logcat` around install/launch shows no crash for `com.peaceantz.stagescope`.
-- **On-device, confirmed via adb (not a preview or a guess)**:
-  - `dumpsys package com.peaceantz.stagescope` shows both new services registered with the correct
-    intent-filter actions and bind permissions (`androidx.wear.tiles.action.BIND_TILE_PROVIDER` /
-    `android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST`).
-  - System `WearServices` log shows the platform itself querying
-    `StageScopeTileService` for a preview resource and preview bitmap immediately after install —
-    i.e. the system recognized and rendered the Tile without throwing.
-  - `WearableService` log shows a `dataChanged` event for
-    `/complication_providers/data/provider_app/com.peaceantz.stagescope/` — the platform registered
-    the app as a complication provider.
-  - The watch unlocked partway through the session, enabling real visual verification (below).
-- **Rendered and inspected on the actual watch, via `adb shell am broadcast ... DEBUG_SURFACE
-  --es operation add-tile ...` (`result=1`) then swiping to it from the watch face** (the paired
-  `DEBUG_SYSUI show-tile` broadcast consistently timed out on this device/OS build — matches last
-  session's note about this unit's testing friction — swiping worked reliably instead):
-  screenshots in `docs/screenshots/tile_populated_state.png`. **This caught and fixed a real bug**:
-  the first render had the reading card filled solid live-green with `filledCardColors()` (the
-  default), the exact "oversized colored surface" anti-pattern `CLAUDE.md` already calls out for
-  in-app buttons — `textDataCard` needed an explicit `colors = filledTonalCardColors()` the same way
-  `DetailButton` needs `filledTonalButtonColors()`. Fixed, rebuilt, reinstalled, re-screenshotted:
-  header mark + "STAGESCOPE", a subtle dark card ("Last reading · 6:23 PM" / "-66.4" / "dBFS"),
-  SPECTRUM/RING compact buttons, and the green MEASURE edge button as the only vivid color on
-  screen — matches the brief's hierarchy. Also switched the card to `DataCardStyle.
-  smallCompactDataCardStyle()`: the default compact style's `NUMERAL_LARGE` title alone consumed
-  most of the main content area and pushed the button row off-screen; `NUMERAL_MEDIUM` leaves room
-  for everything. No clipping at the bezel in the final screenshot; ring-summary row correctly
-  absent (no ring captured this session, not em-dashed).
-- **Tap-through interactivity: attempted, inconclusive, flagged rather than assumed working.**
-  `adb shell input tap` at both the MEASURE edge button and the RING compact button (verified
-  against their on-screen positions) produced no navigation and no log activity at all for
-  `com.peaceantz.stagescope` — the screen stayed pixel-identical to `tile_populated_state.png`.
-  This may be a limitation of tiles reached through the `DEBUG_SURFACE` add-tile path specifically
-  (not going through the normal add-from-picker lifecycle) rather than a real bug — the click
-  wiring (`ActionBuilders.launchAction` + per-element `Clickable` ids) matches the documented API
-  exactly and the equivalent complication `PendingIntent.getActivity` path is a much more
-  well-trodden API — but this was **not proven working on-device** and should not be assumed so.
-  See step 1 below.
+  (~54.7 MB debug/unminified).
+- Installed and launched on the same **Pixel Watch 5** (API 37) used in prior sessions; no crash, no
+  `FATAL EXCEPTION`/`AndroidRuntime` in logcat across the whole session. Rendered and inspected, via
+  screenshots pulled off-device (see `docs/screenshots/analyzer.png`, `analyzer-demo.png`,
+  `ring-searching.png`, `ring-live.png`): Analyzer's Ready/live/Demo states including the radial
+  spectrum with real ambient audio and with Demo's synthetic tones; Ring's SEARCHING state and its
+  LIVE state mid-Demo-cycle with 2 of 5 slots confirmed. The two bugs above were found and fixed
+  through this same process.
 
 ## Next concrete action (physical steps only you can do)
-1. **Glance at the app list** (press the crown/side button from the watch face) and confirm the new
-   StageScope logo looks right there — the one thing about the icon swap not confirmed live
-   on-device this session (this Wear OS build didn't expose the app-drawer screen to scripted `adb
-   shell input` navigation; the icon's pixels were verified by local compositing instead, not by
-   seeing it rendered by the watch's own launcher).
-2. **Confirm tap-through the normal way**: swipe to the Tile carousel, scroll to the end, tap Add,
-   choose StageScope (this exercises the real add-tile lifecycle, unlike the adb shortcut above),
-   then tap MEASURE and confirm it opens the app on LEVEL and starts measuring. This is the one
-   piece of the interaction spec (§3 in the original request) not yet confirmed on real hardware —
-   see the inconclusive tap-through note above.
-3. Long-press the watch face → Edit → pick a complication slot → choose StageScope, for both a
-   SHORT_TEXT-supporting slot and an icon-only slot if the current face offers one; confirm the
-   picker's preview (from `getPreviewData`) looks reasonable and the accessible description reads
-   sensibly (e.g. via TalkBack or the complication picker's own description text), and that tapping
-   it also opens the app correctly.
-4. Tap MEASURE from the Tile with the app fully closed (cold start) and again with it already open
-   in the background (warm/`onNewIntent`) — confirm both times it lands on LEVEL and a measurement
-   starts without a second Start tap, and that backgrounding-then-reopening normally afterward does
-   *not* restart a stopped session.
-5. Get a real (non-demo) Ring capture once — a steady tone near the mic — and confirm both the Tile
-   and complication pick up the frequency after the next `MEASURE`/pin/unpin, then tap the
-   complication's frequency and confirm it opens RING with that exact capture selected; then
-   force-stop the app and tap the complication again to confirm it opens RING plainly without
-   resurrecting the old capture.
-6. Everything from the previous pass's manual checklist (`docs/MEASUREMENTS.md`) that wasn't
-   re-confirmed last session is still outstanding — this pass didn't touch measurement/ring code, so
-   nothing new is at risk there, but it also wasn't re-verified again this session.
+1. **Confirm real touch interaction** on the actual hardware — this session's automated checks could
+   not exercise Calibration, Appearance, the Ring Captures list, or either Details screen, since
+   synthetic touch input does not reach this specific watch via adb (see "on-device findings" above).
+   Walk the full Calibration flow (all 4 steps + success), try all 5 themes with Dim on/off, and open
+   the 5-slot Captures list with a couple of real captures pinned.
+2. **Real (non-demo) five-ring test**: with several distinct steady tones (or a tuner app playing
+   different notes) near the mic, confirm up to 5 are captured and held simultaneously, that pinning
+   several independently works exactly as described, and that a 6th tone's replacement behavior
+   (expired-unpinned first, else sufficiently-stronger-unpinned, else nothing) matches expectations
+   in a real acoustic environment, not just the synthesized unit tests.
+3. **Watch-face complication, live**: get two real rings of different strength going (or louder/
+   quieter tone sources), confirm the complication switches to the stronger one on its own without
+   any Pin tap, confirm it does not defer to an older pinned-but-now-quieter ring, and confirm the
+   dwell/hysteresis feels right (not flappy, not sluggish) rather than just matching the unit tests'
+   synthetic timing.
+4. **Tile visual check with each theme** — swipe to the Tile carousel and confirm its colors actually
+   follow the in-app Appearance selection, not just the app's own screens.
+5. Everything from the manual checklist in `docs/MEASUREMENTS.md` not already covered by the
+   automated on-device checks above is still outstanding for a full physical pass, particularly the
+   192dp/227dp/240dp round-screen and enlarged-font-size checks — only the one connected Pixel Watch
+   5 was available this session, no emulator was set up (deliberately, to avoid adding a new tool to
+   the pinned toolchain), so the smaller/larger round-screen sizes were not visually verified.
 
-## Prior pass (visual redesign + Ring rework) — unchanged this session
-New black/live-green/held-red visual system, `HorizontalPager` (LEVEL→SPECTRUM→RING) with capture
-owned above the pager in a shared `CaptureSession`, and `RingTracker`'s track→capture pipeline
-(350 ms confirm, 150 ms dropout tolerance, auto-hold, pin, bounded 8-record history). See git
-history / prior revisions of this file for that pass's full notes; nothing in it was modified this
-session except where called out above (`RingTracker` itself: untouched).
+## Prior passes — unchanged this session except where called out above
+See git history / prior revisions of this file for: the original visual redesign + Ring rework pass
+(black/live-green/held-red system, `HorizontalPager`, `CaptureSession` sharing, `RingTracker`'s
+original track→capture pipeline); and the app-logo + Tile/complication pass (adaptive icon,
+`StageScopeTileService`/`StageScopeComplicationService`, `SurfaceSummaryRepository`,
+`ui/nav/ShortcutIntents` contract, `WatchShortcutsHelpScreen`). `RingTracker`'s original behavior
+contract is unchanged by this pass except where explicitly listed above (five-slot capacity,
+independent pins, resolution-aware dedup, most-prominent selector, restore-from-disk).

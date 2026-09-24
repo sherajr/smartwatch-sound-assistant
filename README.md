@@ -4,28 +4,48 @@ A wrist-mounted spectrum analyzer and level meter for theatre sound designers, b
 
 ## What's here
 
-Three pages, swipeable left/right (LEVEL → SPECTRUM → RING), each with a small mode label at top
-that doubles as the link to that page's Details/Actions screen (tap "LEVEL ›" etc.):
+Two pages, swipeable left/right (ANALYZER → RING), each with a small mode label at top that
+doubles as the link to that page's Details/Actions screen (tap "ANALYZER ›" / "RING ›"):
 
-- **Level** — live unweighted RMS level (dBFS) as the hero reading, with PK/MAX/AVG chips and a
-  restrained level bar below. Start/Stop is the one button on the main page; Reset, session info,
-  Calibration, and Demo mode live in Level's Details screen.
-- **Spectrum** — a large log-frequency plot fills the page: green solid trace for live data, peak
-  hold, a dominant-frequency readout, and a touch/crown-controlled cursor. Freeze/Resume is the
-  main action (Freeze shows the held trace dashed red with a "HELD" badge); Save, snapshot
-  compare, and peak-hold reset live in Spectrum's Details screen.
-- **Find a Ring** — the hero is the currently selected captured frequency with an explicit state
-  (SEARCHING / DETECTING / LIVE / HELD / PINNED / PAUSED). A confirmed capture's frequency is
-  frozen and held for a configurable 10/20/30s after the tone stops, and can be pinned to keep it
-  selected indefinitely. Pin/Unpin and Clear are the two main-page actions; Start/Stop, the
-  auto-hold duration, and the bounded capture history live in Ring's Details/Captures screens.
-  This is a conservative heuristic based on spectral contrast and persistence over time — it does
-  not identify feedback, suggest EQ, or distinguish a ring from a sustained musical tone.
+- **Analyzer** — a single circular instrument combining Level and Spectrum. The center shows a
+  large, steady RMS level (dBFS, or "Estimated SPL" once calibrated) with PK/MAX/AVG in Details; a
+  radial spectrum fills the surrounding ring (log-frequency angle, fixed dBFS-scale radius, a
+  deliberate gap at the bottom for the two action controls). Tap the ring or turn the crown to move
+  the selection cursor — the frequency/dB readout below the center number always refers to that
+  exact selected band, never a different one. Start/Stop is the primary action; Freeze/Resume holds
+  the spectrum only (the center level and Ring detection keep running — a "SPECTRUM HELD" tag makes
+  that explicit) — peak hold, saved snapshots, and snapshot comparison live in Details.
+- **Ring** — a five-slot bank of confirmed persistent tones, each independently pinnable. The hero
+  shows the currently *selected* capture with an explicit state (SEARCHING / DETECTING / LIVE /
+  HELD / HISTORICAL / PINNED / PAUSED); "Captures N/5 ›" opens the full bank list to select, pin, or
+  unpin any of them individually — pinning one never unpins another. This is a conservative
+  heuristic based on spectral contrast and persistence over time — it does not identify feedback,
+  suggest EQ, or distinguish a ring from a sustained musical tone.
 
 Demo mode (a deterministic synthetic signal through the same DSP pipeline, no microphone use) and
-manual reference-SPL calibration are both reached from Level's Details screen.
+manual reference-SPL calibration are both reached from Analyzer's Details screen.
 
 See `docs/screenshots/` for what the current build looks like on a real watch.
+
+## Appearance
+
+Analyzer Details → Appearance offers five color themes (Phosphor Green, Ice Cyan, Warm Amber,
+Violet, Night Red) plus a separate Dim toggle that works with any of them. Every screen, the radial
+spectrum, and the Tile all read the same palette — changing themes visibly changes the actual
+instrumentation, not just button chrome. The choice persists (`AppSettings.theme`) and existing
+installs without a saved theme default to Phosphor Green.
+
+## Calibration
+
+A guided four-step flow (Prepare → Enter reference reading → Measure → Review/Save), reached from
+Analyzer Details → "Calibrate SPL": explains what calibration does and offers "Use dBFS" to skip it
+entirely; the reference-reading step requires an explicit touch or crown adjustment before
+continuing (an untouched example value is never silently saved as a real reading); Measure runs an
+explicit ~3-second sampling window that energy-averages the whole window into one dB conversion
+(never averaging per-block dB values), with live signal-quality feedback and rejection of
+clipped/too-variable/stale/Demo-mode/config-changed samples; Review shows the reference reading,
+the measured raw watch level, and the resulting offset before an explicit Save, ending in an
+unmistakable "Calibration saved" success screen.
 
 ## Prerequisites
 
@@ -76,11 +96,13 @@ Filtered to StageScope's own process plus crash traces.
 
 ## Using it
 
-- The first time you press **Start** on any page, StageScope asks for microphone permission. Deny it and the page shows a distinct "permission denied" state rather than fake data.
-- Capture is shared across all three pages: starting it on Level also feeds Spectrum and Ring, and swiping between pages never restarts it, resets Level's meters, or drops Ring's captured frequencies. Spectrum's Freeze only pauses *that page's* display, not the underlying capture.
-- **Demo mode** (Level's Details screen) runs the exact same analysis code on a synthetic signal — useful for trying the UI without a live mic, or on an emulator. Every demo screen and saved demo snapshot is clearly labeled; demo and real snapshots are never mixed into the same comparison silently.
-- **Calibration** (Level's Details screen → Calibrate SPL) lets you align the Level page's RMS reading to a trusted SPL meter reading, once, for the current input configuration. It relabels the reading "Estimated SPL" — it is not a certified measurement, and it's cleared automatically if the microphone configuration changes. See docs/MEASUREMENTS.md for exactly what this can and can't correct for.
-- Measurement sessions keep the screen on for up to 2 minutes at a time (visible countdown, in Level's Details), then stop automatically; press Start again to continue. Backgrounding the app or turning the screen off also stops capture — you'll see "Paused" and need to press Start again.
+- The first time you press **Start** on Analyzer or Ring, StageScope asks for microphone permission. Deny it and the page shows a distinct "permission denied" state rather than fake data.
+- Capture is shared across both pages: starting it on Analyzer also feeds Ring, and swiping between pages never restarts it, resets Analyzer's meters, or drops Ring's captured frequencies. Analyzer's Freeze only pauses *the radial spectrum*, not the underlying capture — the center level and Ring detection keep running.
+- **Demo mode** (Analyzer's Details screen) runs the exact same analysis code on a synthetic signal — useful for trying the UI without a live mic, or on an emulator. Every demo screen and saved demo snapshot is clearly labeled; demo and real snapshots/captures are never mixed into the same comparison or saved surface silently.
+- **Calibration** (Analyzer's Details screen → Calibrate SPL) is a guided flow that aligns Analyzer's RMS reading to a trusted SPL meter reading, once, for the current input configuration. It relabels the reading "Estimated SPL" — it is not a certified measurement, and it's cleared automatically if the microphone configuration changes. See docs/MEASUREMENTS.md for exactly what this can and can't correct for.
+- Measurement sessions keep the screen on for up to 2 minutes at a time (visible countdown, in Analyzer's Details), then stop automatically; press Start again to continue. Backgrounding the app or turning the screen off also stops capture — you'll see "Paused" and need to press Start again.
+- **Ring's five-slot bank**: up to five distinct confirmed frequencies at once, each independently pinnable (`Pin`/`Unpin` per capture — pinning one never touches another). When full, a new tone only takes a slot if an existing one has expired (unpinned, past its auto-hold window) or is clearly weaker than the new candidate; if all five are pinned, the Ring page says so plainly. "Clear unpinned" and "Clear all" (behind a confirm step) are both available from the Captures list.
+- **The watch-face complication** always shows the *most prominent currently-confirmed* ring — chosen purely by spectral strength with light hysteresis, never by "pinned, else most recent." Selecting or pinning a capture in-app never changes what the complication shows. It reads cached, historical data only and never opens the microphone, labeled "Last analyzed" rather than implying live listening.
 
 ## Project layout
 

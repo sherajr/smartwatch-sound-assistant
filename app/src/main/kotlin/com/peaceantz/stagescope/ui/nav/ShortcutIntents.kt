@@ -31,18 +31,24 @@ data class ShortcutRequest(
     companion object {
         fun fromIntent(intent: Intent?): ShortcutRequest? {
             val shortcut = intent?.getStringExtra(EXTRA_SHORTCUT) ?: return null
-            val requestId = System.nanoTime()
-            return when (shortcut) {
-                SHORTCUT_MEASURE -> ShortcutRequest(requestId, ModePage.LEVEL, startMeasure = true)
-                SHORTCUT_OPEN_LEVEL -> ShortcutRequest(requestId, ModePage.LEVEL)
-                SHORTCUT_OPEN_SPECTRUM -> ShortcutRequest(requestId, ModePage.SPECTRUM)
-                SHORTCUT_OPEN_RING -> ShortcutRequest(
-                    requestId = requestId,
-                    page = ModePage.RING,
-                    ringCaptureId = intent.getLongExtra(EXTRA_RING_CAPTURE_ID, -1L).takeIf { it >= 0 },
-                )
-                else -> null
-            }
+            val ringCaptureId = intent.getLongExtra(EXTRA_RING_CAPTURE_ID, -1L).takeIf { it >= 0 }
+            return forShortcut(shortcut, ringCaptureId, requestId = System.nanoTime())
+        }
+
+        /**
+         * Pure routing logic, separated from [fromIntent]'s `android.content.Intent` parsing so it
+         * is unit-testable without an Android framework/Robolectric dependency. LEVEL and SPECTRUM
+         * shortcuts both predate the combined Analyzer page -- existing Tile/complication
+         * `PendingIntent`s (and this constant contract) still send those shortcut strings, so both
+         * keep working by routing to [ModePage.ANALYZER] rather than requiring every surface to be
+         * rebuilt in lockstep with this redesign.
+         */
+        fun forShortcut(shortcut: String?, ringCaptureId: Long?, requestId: Long): ShortcutRequest? = when (shortcut) {
+            SHORTCUT_MEASURE -> ShortcutRequest(requestId, ModePage.ANALYZER, startMeasure = true)
+            SHORTCUT_OPEN_LEVEL -> ShortcutRequest(requestId, ModePage.ANALYZER)
+            SHORTCUT_OPEN_SPECTRUM -> ShortcutRequest(requestId, ModePage.ANALYZER)
+            SHORTCUT_OPEN_RING -> ShortcutRequest(requestId = requestId, page = ModePage.RING, ringCaptureId = ringCaptureId)
+            else -> null
         }
     }
 }

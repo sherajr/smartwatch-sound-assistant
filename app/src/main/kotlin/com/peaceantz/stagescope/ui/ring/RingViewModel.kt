@@ -7,6 +7,7 @@ import com.peaceantz.stagescope.AppContainer
 import com.peaceantz.stagescope.audio.CaptureConfig
 import com.peaceantz.stagescope.audio.CaptureSession
 import com.peaceantz.stagescope.audio.CaptureStatus
+import com.peaceantz.stagescope.data.PersistedRingCapture
 import com.peaceantz.stagescope.data.RingSummaryState
 import com.peaceantz.stagescope.dsp.RingCapture
 import com.peaceantz.stagescope.dsp.RingCaptureState
@@ -37,7 +38,9 @@ sealed interface RingUiState {
 /**
  * Owns the ring analysis session (RingTracker + its own SpectrumAnalyzer) above the pager: it
  * registers on the shared [CaptureSession] and must survive page swipes and Details navigation
- * without restarting capture or losing captures.
+ * without restarting capture or losing captures. Pinned captures are additionally restored from
+ * [com.peaceantz.stagescope.data.RingBankRepository] at startup (metadata only, no audio) and
+ * re-saved on every pin-affecting change.
  */
 class RingViewModel(private val container: AppContainer, private val session: CaptureSession) : ViewModel() {
 
@@ -51,12 +54,13 @@ class RingViewModel(private val container: AppContainer, private val session: Ca
 
     private var currentConfig: CaptureConfig? = null
     private var lastPublishMillis = 0L
-    private var lastPersistedRingKey: Pair<Long, Boolean>? = null
+    private var lastPersistedRingKey: Triple<Long, Boolean, Double>? = null
 
     private val listener: (FloatArray) -> Unit = { block -> onBlock(block) }
 
     init {
         applyPersistedAutoHold()
+        restorePinnedBank()
         session.addListener(listener)
         viewModelScope.launch { session.status.collect(::handleStatus) }
     }
@@ -75,11 +79,13 @@ class RingViewModel(private val container: AppContainer, private val session: Ca
     fun pin(captureId: Long) {
         tracker.pin(captureId)
         publishCurrent()
+        persistPinnedBank()
     }
 
-    fun unpin() {
-        tracker.unpin()
+    fun unpin(captureId: Long) {
+        tracker.unpin(captureId)
         publishCurrent()
+        persistPinnedBank()
     }
 
     fun selectCapture(captureId: Long) {
@@ -90,11 +96,18 @@ class RingViewModel(private val container: AppContainer, private val session: Ca
     fun clearSelected() {
         tracker.clearSelected()
         publishCurrent()
+        persistPinnedBank()
+    }
+
+    fun clearUnpinned() {
+        tracker.clearUnpinned()
+        publishCurrent()
     }
 
     fun clearAll() {
         tracker.clearAll()
         publishCurrent()
+        persistPinnedBank()
     }
 
     fun setAutoHoldSeconds(seconds: Int) {
@@ -107,6 +120,25 @@ class RingViewModel(private val container: AppContainer, private val session: Ca
     private fun applyPersistedAutoHold() {
         val seconds = container.settingsRepository.settings.value.ringAutoHoldSeconds
         tracker.settings = tracker.settings.copy(autoHoldMs = seconds * 1000L)
+    }
+
+    /** Replays pinned captures saved from a previous run -- frequency/id only, never audio. They
+     *  read as PINNED (and [RingCapture.restoredFromDisk]) until a live detection updates them. */
+    private fun restorePinnedBank() {
+        for (persisted in container.ringBankRepository.bank.value.pinned) {
+            tracker.restoreCapture(
+                id = persisted.id,
+                frequencyHz = persisted.frequencyHz,
+                savedAtWallClockMillis = persisted.savedAtMillis,
+            )
+        }
+    }
+
+    private fun persistPinnedBank() {
+        val pinned = tracker.currentSnapshot().history.filter { it.pinned }.map {
+            PersistedRingCapture(id = it.id, frequencyHz = it.frequencyHz, savedAtMillis = System.currentTimeMillis())
+        }
+        viewModelScope.launch { container.ringBankRepository.savePinned(pinned) }
     }
 
     override fun onCleared() {
@@ -161,33 +193,46 @@ class RingViewModel(private val container: AppContainer, private val session: Ca
     }
 
     /**
-     * Writes the best candidate (pinned capture, else most recently seen) to
-     * [com.peaceantz.stagescope.data.SurfaceSummaryRepository] for the Tile/complication -- only
-     * when the chosen capture's identity actually changes (a new confirm, a pin/unpin, a clear),
-     * not on every throttled block update, so a live stream of detector events never turns into
-     * continuous provider updates. Demo-mode sessions never touch the persisted summary.
+     * Writes the most prominent currently-confirmed ring (per [RingSnapshot.mostProminentCaptureId],
+     * falling back to the strongest remaining historical capture if that id was cleared) to
+     * [com.peaceantz.stagescope.data.SurfaceSummaryRepository] for the Tile/complication -- NOT
+     * "pinned, else most recent": pin state and manual selection never enter this decision, so a
+     * switch driven purely by the audio stream (no Pin tap at all) still reaches the complication.
+     * Only writes when the chosen capture's identity/pin/frequency actually changed, so a live
+     * stream of detector updates at ~10 Hz never turns into continuous provider writes.
      */
     private fun maybePersistRingSummary(snap: RingSnapshot, isDemo: Boolean) {
         if (isDemo) return
-        val best = snap.history.firstOrNull { it.pinned } ?: snap.history.firstOrNull()
-        val key = best?.let { it.id to it.pinned }
+        val chosen = resolveComplicationCapture(snap)
+        val key = chosen?.let { Triple(it.id, it.pinned, it.frequencyHz) }
         if (key == lastPersistedRingKey) return
         lastPersistedRingKey = key
         viewModelScope.launch {
-            container.surfaceSummaryRepository.setRingSummary(best?.toRingSummaryState())
+            container.surfaceSummaryRepository.setRingSummary(chosen?.toRingSummaryState())
             notifyWatchSurfacesChanged(container.appContext)
         }
     }
 
-    /** Converts the capture's monotonic (`nanoTime`-based) timestamp to wall-clock for persistence. */
+    private fun resolveComplicationCapture(snap: RingSnapshot): RingCapture? {
+        val byMostProminentId = snap.mostProminentCaptureId?.let { id -> snap.history.find { it.id == id } }
+        if (byMostProminentId != null) return byMostProminentId
+        return snap.history.maxByOrNull { it.prominenceDb }
+    }
+
+    /** Converts the capture's monotonic timestamp to wall-clock; a disk-restored capture instead
+     *  uses its saved wall-clock time directly (this run's monotonic clock has no relation to it). */
     private fun RingCapture.toRingSummaryState(): RingSummaryState {
-        val nanoNowMillis = SystemMonotonicClock.nowMillis()
-        val wallNowMillis = System.currentTimeMillis()
-        val wallConfirmedAt = wallNowMillis - (nanoNowMillis - confirmedAtMs)
+        val timestamp = if (restoredFromDisk && restoredWallClockMillis != null) {
+            restoredWallClockMillis
+        } else {
+            val nanoNowMillis = SystemMonotonicClock.nowMillis()
+            val wallNowMillis = System.currentTimeMillis()
+            wallNowMillis - (nanoNowMillis - lastSeenAtMs)
+        }
         return RingSummaryState(
             captureId = id,
             frequencyHz = frequencyHz,
-            timestampMillis = wallConfirmedAt,
+            timestampMillis = timestamp,
             pinned = pinned,
         )
     }
@@ -201,6 +246,10 @@ class RingViewModel(private val container: AppContainer, private val session: Ca
             detectingFrequencyHz = null,
             otherCandidates = emptyList(),
             history = emptyList(),
+            mostProminentCaptureId = null,
+            slotsUsed = 0,
+            slotsTotal = 5,
+            allSlotsPinned = false,
         )
     }
 }

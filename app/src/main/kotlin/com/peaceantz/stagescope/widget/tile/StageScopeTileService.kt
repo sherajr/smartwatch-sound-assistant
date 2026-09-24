@@ -43,7 +43,8 @@ import com.peaceantz.stagescope.ui.nav.EXTRA_SHORTCUT
 import com.peaceantz.stagescope.ui.nav.SHORTCUT_MEASURE
 import com.peaceantz.stagescope.ui.nav.SHORTCUT_OPEN_RING
 import com.peaceantz.stagescope.ui.nav.SHORTCUT_OPEN_SPECTRUM
-import com.peaceantz.stagescope.ui.theme.StageScopeColors
+import com.peaceantz.stagescope.ui.theme.StageScopePalette
+import com.peaceantz.stagescope.ui.theme.StageScopePalettes
 import com.peaceantz.stagescope.widget.formatDbCompact
 import com.peaceantz.stagescope.widget.formatFrequencyReadable
 import com.peaceantz.stagescope.widget.formatWhen
@@ -65,12 +66,13 @@ class StageScopeTileService : TileService() {
     override fun onTileRequest(requestParams: RequestBuilders.TileRequest): ListenableFuture<Tile> {
         val container = (applicationContext as StageScopeApp).container
         val summary = container.surfaceSummaryRepository.summary.value
+        val settings = container.settingsRepository.settings.value
 
         val layout = materialScope(
             context = this,
             deviceConfiguration = requestParams.deviceConfiguration,
             allowDynamicTheme = false,
-            defaultColorScheme = stageScopeTileColorScheme(),
+            defaultColorScheme = stageScopeTileColorScheme(StageScopePalettes.forTheme(settings.theme), settings.dimAppearanceEnabled),
         ) {
             primaryLayout(
                 titleSlot = {
@@ -145,10 +147,10 @@ private fun MaterialScope.tileMainContent(context: Context, summary: SurfaceSumm
     val ring = summary.ringSummary
     if (ring != null) {
         column.addContent(Spacer.Builder().setHeight(SPACER_DP).build())
-        val prefix = if (ring.pinned) "PINNED" else "Last ring"
+        val pinnedNote = if (ring.pinned) " · pinned" else ""
         column.addContent(
             text(
-                text = "$prefix · ${formatFrequencyReadable(ring.frequencyHz)}".layoutString,
+                text = "Top ring · ${formatFrequencyReadable(ring.frequencyHz)}$pinnedNote".layoutString,
                 typography = Typography.LABEL_MEDIUM,
                 color = colorScheme.onSurfaceVariant,
             )
@@ -160,8 +162,8 @@ private fun MaterialScope.tileMainContent(context: Context, summary: SurfaceSumm
         buttonGroup {
             buttonGroupItem {
                 compactButton(
-                    onClick = shortcutClickable(context, "spectrum", SHORTCUT_OPEN_SPECTRUM),
-                    labelContent = { text("SPECTRUM".layoutString) },
+                    onClick = shortcutClickable(context, "analyzer", SHORTCUT_OPEN_SPECTRUM),
+                    labelContent = { text("ANALYZER".layoutString) },
                     width = weight(1f),
                     colors = filledTonalButtonColors(),
                 )
@@ -202,28 +204,33 @@ private fun shortcutClickable(
     return Clickable.Builder().setId(id).setOnClick(action).build()
 }
 
-/** Reuses the app's own palette (ui/theme/Theme.kt) so the Tile matches the in-app look exactly. */
-private fun stageScopeTileColorScheme(): ColorScheme {
-    val c = StageScopeColors
+/** Reuses the app's own active palette + Dim setting (ui/theme/Theme.kt) so the Tile visibly
+ *  follows the in-app theme choice, not just the app's own buttons. */
+private fun stageScopeTileColorScheme(palette: StageScopePalette, dim: Boolean): ColorScheme {
+    val live = if (dim) palette.LiveDim else palette.Live
+    val held = if (dim) palette.HeldDim else palette.Held
+    val primaryText = if (dim) palette.PrimaryTextDim else palette.PrimaryText
+    val secondaryText = if (dim) palette.SecondaryTextDim else palette.SecondaryText
+    val grid = if (dim) palette.GridDim else palette.Grid
     val black = android.graphics.Color.BLACK.argb
     return ColorScheme(
-        primary = c.Live.toArgb().argb,
+        primary = live.toArgb().argb,
         onPrimary = black,
-        primaryContainer = c.Surface.toArgb().argb,
-        onPrimaryContainer = c.PrimaryText.toArgb().argb,
-        secondary = c.SecondaryText.toArgb().argb,
+        primaryContainer = palette.Surface.toArgb().argb,
+        onPrimaryContainer = primaryText.toArgb().argb,
+        secondary = secondaryText.toArgb().argb,
         onSecondary = black,
-        surfaceContainer = c.Surface.toArgb().argb,
-        surfaceContainerLow = c.Surface.toArgb().argb,
-        surfaceContainerHigh = c.Surface.toArgb().argb,
-        onSurface = c.PrimaryText.toArgb().argb,
-        onSurfaceVariant = c.SecondaryText.toArgb().argb,
-        outline = c.Grid.toArgb().argb,
-        outlineVariant = c.Grid.toArgb().argb,
-        background = c.Background.toArgb().argb,
-        onBackground = c.PrimaryText.toArgb().argb,
-        error = c.Held.toArgb().argb,
-        errorContainer = c.Held.toArgb().argb,
+        surfaceContainer = palette.Surface.toArgb().argb,
+        surfaceContainerLow = palette.Surface.toArgb().argb,
+        surfaceContainerHigh = palette.Surface.toArgb().argb,
+        onSurface = primaryText.toArgb().argb,
+        onSurfaceVariant = secondaryText.toArgb().argb,
+        outline = grid.toArgb().argb,
+        outlineVariant = grid.toArgb().argb,
+        background = palette.Background.toArgb().argb,
+        onBackground = primaryText.toArgb().argb,
+        error = held.toArgb().argb,
+        errorContainer = held.toArgb().argb,
         onError = black,
         onErrorContainer = black,
     )

@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import com.peaceantz.stagescope.audio.AudioCaptureEngine
 import com.peaceantz.stagescope.audio.PcmSource
+import com.peaceantz.stagescope.data.RingBankRepository
 import com.peaceantz.stagescope.data.SettingsRepository
 import com.peaceantz.stagescope.data.SnapshotRepository
 import com.peaceantz.stagescope.data.SurfaceSummaryRepository
@@ -15,6 +16,7 @@ class AppContainer(context: Context) {
     val settingsRepository = SettingsRepository(appContext)
     val snapshotRepository = SnapshotRepository(appContext)
     val surfaceSummaryRepository = SurfaceSummaryRepository(appContext)
+    val ringBankRepository = RingBankRepository(appContext)
     val audioCaptureEngine = AudioCaptureEngine(appContext)
     val demoSignalGenerator = DemoSignalGenerator()
 

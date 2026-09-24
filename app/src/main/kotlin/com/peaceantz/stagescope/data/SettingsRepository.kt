@@ -49,6 +49,12 @@ class SettingsRepository(context: Context) {
         persist(updated)
     }
 
+    suspend fun setTheme(theme: AppTheme) {
+        val updated = _settings.value.copy(theme = theme)
+        _settings.value = updated
+        persist(updated)
+    }
+
     suspend fun setCalibration(calibration: CalibrationState?) {
         val updated = _settings.value.copy(calibration = calibration)
         _settings.value = updated

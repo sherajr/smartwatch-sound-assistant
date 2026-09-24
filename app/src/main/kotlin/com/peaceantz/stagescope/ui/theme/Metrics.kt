@@ -17,8 +17,12 @@ object StageScopeType {
     /** Primary reading, e.g. the Level dBFS numeral. Spec range: 32-40sp. */
     val primaryLevelSp = 36.sp
 
-    /** A frequency readout, e.g. Spectrum cursor or Ring hero frequency. Spec range: 26-34sp. */
+    /** A frequency readout, e.g. Ring hero frequency (roomy context, e.g. Ring's own page). */
     val frequencySp = 30.sp
+
+    /** The Analyzer dial's compact cursor readout -- deliberately smaller than [frequencySp]: it
+     *  shares the dial's tight inner "safe zone" with the primary reading, unit, and tags. */
+    val compactReadoutSp = 16.sp
 
     /** Secondary metrics (PK/MAX/AVG, units, status text). Spec range: 12-14sp. */
     val secondarySp = 13.sp
@@ -40,6 +44,10 @@ fun primaryLevelStyle(): TextStyle = MaterialTheme.typography.numeralLarge.copy(
 @Composable
 @ReadOnlyComposable
 fun frequencyStyle(): TextStyle = MaterialTheme.typography.numeralMedium.copy(fontSize = StageScopeType.frequencySp)
+
+@Composable
+@ReadOnlyComposable
+fun compactReadoutStyle(): TextStyle = MaterialTheme.typography.numeralMedium.copy(fontSize = StageScopeType.compactReadoutSp)
 
 @Composable
 @ReadOnlyComposable

@@ -30,7 +30,7 @@ class MainActivity : ComponentActivity() {
         val container = (application as StageScopeApp).container
         setContent {
             val settings by container.settingsRepository.settings.collectAsStateWithLifecycle()
-            StageScopeTheme(dimAppearance = settings.dimAppearanceEnabled) {
+            StageScopeTheme(theme = settings.theme, dimAppearance = settings.dimAppearanceEnabled) {
                 StageScopeNavHost(
                     container = container,
                     pendingAction = pendingRequest,

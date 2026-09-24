@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.wear.compose.foundation.pager.HorizontalPager
@@ -12,44 +13,42 @@ import androidx.wear.compose.material3.AnimatedPage
 import androidx.wear.compose.material3.AppScaffold
 import androidx.wear.compose.material3.HorizontalPagerScaffold
 import androidx.wear.compose.material3.PagerScaffoldDefaults
-import androidx.wear.compose.material3.ScreenScaffold
-import androidx.wear.compose.navigation.SwipeDismissableNavHost
-import androidx.wear.compose.navigation.composable
-import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
 import com.peaceantz.stagescope.AppContainer
+import com.peaceantz.stagescope.ui.analyzer.AnalyzerDetailsScreen
+import com.peaceantz.stagescope.ui.analyzer.AnalyzerScreen
+import com.peaceantz.stagescope.ui.analyzer.AnalyzerViewModel
+import com.peaceantz.stagescope.ui.analyzer.SnapshotManagerScreen
 import com.peaceantz.stagescope.ui.components.rememberAudioPermissionRequester
 import com.peaceantz.stagescope.ui.help.WatchShortcutsHelpScreen
-import com.peaceantz.stagescope.ui.level.LevelDetailsScreen
-import com.peaceantz.stagescope.ui.level.LevelScreen
-import com.peaceantz.stagescope.ui.level.LevelViewModel
 import com.peaceantz.stagescope.ui.main.CaptureSessionViewModel
 import com.peaceantz.stagescope.ui.ring.RingCapturesScreen
 import com.peaceantz.stagescope.ui.ring.RingDetailsScreen
 import com.peaceantz.stagescope.ui.ring.RingScreen
 import com.peaceantz.stagescope.ui.ring.RingViewModel
+import com.peaceantz.stagescope.ui.settings.AppearanceScreen
 import com.peaceantz.stagescope.ui.settings.CalibrationScreen
 import com.peaceantz.stagescope.ui.settings.CalibrationViewModel
-import com.peaceantz.stagescope.ui.spectrum.SnapshotManagerScreen
-import com.peaceantz.stagescope.ui.spectrum.SpectrumDetailsScreen
-import com.peaceantz.stagescope.ui.spectrum.SpectrumScreen
-import com.peaceantz.stagescope.ui.spectrum.SpectrumViewModel
+import androidx.wear.compose.navigation.SwipeDismissableNavHost
+import androidx.wear.compose.navigation.composable
+import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
 
 const val ROUTE_MAIN = "main"
-const val ROUTE_LEVEL_DETAILS = "levelDetails"
-const val ROUTE_SPECTRUM_DETAILS = "spectrumDetails"
-const val ROUTE_SPECTRUM_SNAPSHOTS = "spectrumSnapshots"
+const val ROUTE_ANALYZER_DETAILS = "analyzerDetails"
+const val ROUTE_SNAPSHOTS = "snapshots"
 const val ROUTE_RING_DETAILS = "ringDetails"
 const val ROUTE_RING_CAPTURES = "ringCaptures"
 const val ROUTE_CALIBRATION = "calibration"
+const val ROUTE_APPEARANCE = "appearance"
 const val ROUTE_WATCH_SHORTCUTS_HELP = "watchShortcutsHelp"
 private const val KEY_COMPARE_SNAPSHOT_ID = "compareSnapshotId"
 
-/** Page indices within the LEVEL -> SPECTRUM -> RING pager, fixed order per spec. */
+/** Page indices within the ANALYZER -> RING pager, fixed order per spec. LEVEL and SPECTRUM were
+ *  combined into ANALYZER; [ShortcutRequest.fromIntent] still routes their old shortcut strings
+ *  here so existing Tile/complication PendingIntents keep working unmodified. */
 object ModePage {
-    const val LEVEL = 0
-    const val SPECTRUM = 1
-    const val RING = 2
-    const val COUNT = 3
+    const val ANALYZER = 0
+    const val RING = 1
+    const val COUNT = 2
 }
 
 @Composable
@@ -60,6 +59,15 @@ fun StageScopeNavHost(
 ) {
     val navController = rememberSwipeDismissableNavController()
 
+    // Wear Navigation composes ROUTE_MAIN's content lambda in its own composition scoped to the
+    // backstack entry, which is NOT re-invoked just because this outer function recomposes with a
+    // new `pendingAction` (a second Tile/complication tap while the app is already open) -- a
+    // closure over the raw parameter would silently keep seeing the value from the FIRST
+    // composition. rememberUpdatedState gives the inner LaunchedEffect a stable reference whose
+    // `.value` always reflects the latest tap, without restarting the effect on every recomposition.
+    val currentPendingAction = rememberUpdatedState(pendingAction)
+    val currentOnPendingActionConsumed = rememberUpdatedState(onPendingActionConsumed)
+
     SwipeDismissableNavHost(navController = navController, startDestination = ROUTE_MAIN) {
         composable(ROUTE_MAIN) { backStackEntry ->
             val sessionViewModel: CaptureSessionViewModel = viewModel(
@@ -67,11 +75,8 @@ fun StageScopeNavHost(
             ) { CaptureSessionViewModel(container) }
             val session = sessionViewModel.session
 
-            val levelViewModel: LevelViewModel = viewModel(viewModelStoreOwner = backStackEntry) {
-                LevelViewModel(container, session)
-            }
-            val spectrumViewModel: SpectrumViewModel = viewModel(viewModelStoreOwner = backStackEntry) {
-                SpectrumViewModel(container, session)
+            val analyzerViewModel: AnalyzerViewModel = viewModel(viewModelStoreOwner = backStackEntry) {
+                AnalyzerViewModel(container, session)
             }
             val ringViewModel: RingViewModel = viewModel(viewModelStoreOwner = backStackEntry) {
                 RingViewModel(container, session)
@@ -82,18 +87,18 @@ fun StageScopeNavHost(
                 .collectAsStateWithLifecycle()
 
             AppScaffold {
-                val pagerState = rememberPagerState(initialPage = ModePage.LEVEL) { ModePage.COUNT }
+                val pagerState = rememberPagerState(initialPage = ModePage.ANALYZER) { ModePage.COUNT }
 
                 // Applies a Tile/complication tap (page switch, optional Measure-start, optional
                 // ring capture selection) to this already-alive session exactly once per delivery
                 // -- see ShortcutRequest/MainActivity for how replays are ruled out upstream.
-                val requestMeasure = rememberAudioPermissionRequester(onGranted = levelViewModel::start)
-                LaunchedEffect(pendingAction?.requestId) {
-                    val action = pendingAction ?: return@LaunchedEffect
+                val requestMeasure = rememberAudioPermissionRequester(onGranted = analyzerViewModel::start)
+                LaunchedEffect(currentPendingAction.value?.requestId) {
+                    val action = currentPendingAction.value ?: return@LaunchedEffect
                     pagerState.scrollToPage(action.page)
                     if (action.startMeasure) requestMeasure()
                     action.ringCaptureId?.let { ringViewModel.selectCapture(it) }
-                    onPendingActionConsumed()
+                    currentOnPendingActionConsumed.value()
                 }
 
                 HorizontalPagerScaffold(pagerState = pagerState) {
@@ -105,14 +110,10 @@ fun StageScopeNavHost(
                     ) { page ->
                         AnimatedPage(pageIndex = page, pagerState = pagerState) {
                             when (page) {
-                                ModePage.LEVEL -> LevelScreen(
-                                    viewModel = levelViewModel,
-                                    onOpenDetails = { navController.navigate(ROUTE_LEVEL_DETAILS) },
-                                )
-                                ModePage.SPECTRUM -> SpectrumScreen(
-                                    viewModel = spectrumViewModel,
+                                ModePage.ANALYZER -> AnalyzerScreen(
+                                    viewModel = analyzerViewModel,
                                     compareSnapshotId = compareId,
-                                    onOpenDetails = { navController.navigate(ROUTE_SPECTRUM_DETAILS) },
+                                    onOpenDetails = { navController.navigate(ROUTE_ANALYZER_DETAILS) },
                                 )
                                 ModePage.RING -> RingScreen(
                                     viewModel = ringViewModel,
@@ -126,37 +127,25 @@ fun StageScopeNavHost(
             }
         }
 
-        composable(ROUTE_LEVEL_DETAILS) { entry ->
+        composable(ROUTE_ANALYZER_DETAILS) { entry ->
             val mainEntry = remember(entry) { navController.getBackStackEntry(ROUTE_MAIN) }
             val sessionViewModel: CaptureSessionViewModel = viewModel(viewModelStoreOwner = mainEntry) {
                 CaptureSessionViewModel(container)
             }
-            val levelViewModel: LevelViewModel = viewModel(viewModelStoreOwner = mainEntry) {
-                LevelViewModel(container, sessionViewModel.session)
+            val analyzerViewModel: AnalyzerViewModel = viewModel(viewModelStoreOwner = mainEntry) {
+                AnalyzerViewModel(container, sessionViewModel.session)
             }
-            LevelDetailsScreen(
+            AnalyzerDetailsScreen(
                 container = container,
-                viewModel = levelViewModel,
+                viewModel = analyzerViewModel,
                 onOpenCalibration = { navController.navigate(ROUTE_CALIBRATION) },
+                onOpenSnapshots = { navController.navigate(ROUTE_SNAPSHOTS) },
+                onOpenAppearance = { navController.navigate(ROUTE_APPEARANCE) },
                 onOpenWatchShortcuts = { navController.navigate(ROUTE_WATCH_SHORTCUTS_HELP) },
             )
         }
 
-        composable(ROUTE_SPECTRUM_DETAILS) { entry ->
-            val mainEntry = remember(entry) { navController.getBackStackEntry(ROUTE_MAIN) }
-            val sessionViewModel: CaptureSessionViewModel = viewModel(viewModelStoreOwner = mainEntry) {
-                CaptureSessionViewModel(container)
-            }
-            val spectrumViewModel: SpectrumViewModel = viewModel(viewModelStoreOwner = mainEntry) {
-                SpectrumViewModel(container, sessionViewModel.session)
-            }
-            SpectrumDetailsScreen(
-                viewModel = spectrumViewModel,
-                onOpenSnapshots = { navController.navigate(ROUTE_SPECTRUM_SNAPSHOTS) },
-            )
-        }
-
-        composable(ROUTE_SPECTRUM_SNAPSHOTS) {
+        composable(ROUTE_SNAPSHOTS) {
             SnapshotManagerScreen(
                 container = container,
                 onSelectCompare = { id ->
@@ -196,7 +185,11 @@ fun StageScopeNavHost(
             val calibrationViewModel: CalibrationViewModel = viewModel(viewModelStoreOwner = mainEntry) {
                 CalibrationViewModel(container, sessionViewModel.session)
             }
-            CalibrationScreen(viewModel = calibrationViewModel)
+            CalibrationScreen(viewModel = calibrationViewModel, onExit = { navController.popBackStack() })
+        }
+
+        composable(ROUTE_APPEARANCE) {
+            AppearanceScreen(container = container)
         }
 
         composable(ROUTE_WATCH_SHORTCUTS_HELP) {

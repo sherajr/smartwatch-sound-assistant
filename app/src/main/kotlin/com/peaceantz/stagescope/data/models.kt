@@ -14,12 +14,21 @@ data class CalibrationState(
     val timestampMillis: Long,
 )
 
+/**
+ * Selectable color theme. New field on [AppSettings] with a default -- an existing install's
+ * settings.json simply lacks this key, and `Json { ignoreUnknownKeys = true }` plus this default
+ * parameter means it deserializes to [PHOSPHOR_GREEN] (the original, only palette) automatically.
+ */
+@Serializable
+enum class AppTheme { PHOSPHOR_GREEN, ICE_CYAN, WARM_AMBER, VIOLET, NIGHT_RED }
+
 @Serializable
 data class AppSettings(
     val demoModeEnabled: Boolean = false,
     val calibration: CalibrationState? = null,
     val dimAppearanceEnabled: Boolean = false,
     val ringAutoHoldSeconds: Int = 20,
+    val theme: AppTheme = AppTheme.PHOSPHOR_GREEN,
 )
 
 /** A saved SPECTRUM snapshot with enough metadata to judge whether a comparison is valid. */

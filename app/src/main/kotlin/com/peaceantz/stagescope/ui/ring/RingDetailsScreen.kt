@@ -12,9 +12,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
-import com.peaceantz.stagescope.ui.components.DetailButton
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
+import com.peaceantz.stagescope.ui.components.DetailButton
 
 @Composable
 fun RingDetailsScreen(viewModel: RingViewModel) {
@@ -36,6 +36,14 @@ fun RingDetailsScreen(viewModel: RingViewModel) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        item {
+            Text(
+                "Holds up to 5 distinct captures at once. Pin as many as you like -- pinning one " +
+                    "never unpins another. The watch-face complication shows whichever confirmed ring " +
+                    "is currently strongest, independent of what you've selected or pinned here.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
 
         item {
             if (isMeasuring) {
@@ -44,7 +52,7 @@ fun RingDetailsScreen(viewModel: RingViewModel) {
                 DetailButton(onClick = viewModel::start, modifier = Modifier.fillMaxWidth()) { Text("Start") }
             }
         }
-        item { DetailButton(onClick = viewModel::clearAll, modifier = Modifier.fillMaxWidth()) { Text("Clear all") } }
+        item { DetailButton(onClick = viewModel::clearUnpinned, modifier = Modifier.fillMaxWidth()) { Text("Clear unpinned") } }
 
         item { Text("Auto-hold duration", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         item {

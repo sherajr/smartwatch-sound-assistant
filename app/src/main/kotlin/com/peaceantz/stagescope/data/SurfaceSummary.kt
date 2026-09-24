@@ -23,7 +23,15 @@ data class LastReadingSummary(
     val timestampMillis: Long,
 )
 
-/** [timestampMillis] is wall-clock, converted from the capture's monotonic `confirmedAtMs`. */
+/**
+ * The most prominent currently-confirmed ring, as chosen by
+ * [com.peaceantz.stagescope.dsp.RingTracker]'s smoothed-prominence selector -- deliberately NOT
+ * "pinned, else most recent": pin state and manual selection never influence this, so a stronger
+ * live ring always outranks an older pinned one here. [timestampMillis] is wall-clock, converted
+ * from the capture's monotonic `lastSeenAtMs`/`confirmedAtMs`; the complication/Tile always label
+ * this "Last" (cached), never implying the watch face is actively listening. [pinned] is carried
+ * only for a secondary "you pinned this" hint -- it is not the selection criterion.
+ */
 @Serializable
 data class RingSummaryState(
     val captureId: Long,

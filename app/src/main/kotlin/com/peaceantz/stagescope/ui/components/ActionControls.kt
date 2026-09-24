@@ -21,7 +21,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
-import com.peaceantz.stagescope.ui.theme.StageScopeColors
+import com.peaceantz.stagescope.ui.theme.LocalStageScopePalette
 import com.peaceantz.stagescope.ui.theme.StageScopeDimens
 
 /**
@@ -37,10 +37,11 @@ fun CompactGlyphButton(
     tint: Color = MaterialTheme.colorScheme.onSurface,
     enabled: Boolean = true,
 ) {
+    val palette = LocalStageScopePalette.current
     Box(
         modifier = modifier
             .size(StageScopeDimens.minTouchTarget)
-            .background(StageScopeColors.Surface, CircleShape)
+            .background(palette.Surface, CircleShape)
             .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
             .clickable(enabled = enabled, onClick = onClick)
             .semantics {

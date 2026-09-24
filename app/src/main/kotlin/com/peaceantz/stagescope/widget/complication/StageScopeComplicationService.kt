@@ -62,26 +62,32 @@ private fun buildComplicationData(
     else -> null
 }
 
+/**
+ * [ring] is always the most prominent CONFIRMED ring at last analysis (see
+ * [com.peaceantz.stagescope.dsp.RingTracker]'s prominence selector) -- never "pinned, else most
+ * recent". This is cached, historical data read straight off disk; the wording below never claims
+ * the watch is currently listening, per spec ("Last" framing regardless of how fresh the data is).
+ */
 private fun buildShortText(context: Context, ring: RingSummaryState?): ShortTextComplicationData {
     if (ring == null) {
         return ShortTextComplicationData.Builder(
             text = PlainComplicationText.Builder("StageScope").build(),
             contentDescription = PlainComplicationText.Builder(
-                "StageScope. No saved ring frequency yet. Opens Level."
+                "StageScope. No saved ring frequency yet. Opens Analyzer."
             ).build(),
         )
             .setTitle(PlainComplicationText.Builder("SS").build())
-            .setTapAction(openLevelPendingIntent(context))
+            .setTapAction(openAnalyzerPendingIntent(context))
             .build()
     }
-    val statusWord = if (ring.pinned) "Pinned" else "Last"
+    val pinnedNote = if (ring.pinned) ", pinned" else ""
     return ShortTextComplicationData.Builder(
         text = PlainComplicationText.Builder(formatFrequencyCompact(ring.frequencyHz)).build(),
         contentDescription = PlainComplicationText.Builder(
-            "$statusWord ring ${formatFrequencyReadable(ring.frequencyHz)}, saved ${formatWhen(ring.timestampMillis)}."
+            "Most prominent ring ${formatFrequencyReadable(ring.frequencyHz)}$pinnedNote. Last analyzed ${formatWhen(ring.timestampMillis)}."
         ).build(),
     )
-        .setTitle(PlainComplicationText.Builder(if (ring.pinned) "PIN" else "LAST").build())
+        .setTitle(PlainComplicationText.Builder("LAST").build())
         .setTapAction(openRingPendingIntent(context, ring.captureId))
         .build()
 }
@@ -95,17 +101,17 @@ private fun buildMonochromaticImage(
         MonochromaticImageComplicationData.Builder(
             monochromaticImage = image,
             contentDescription = PlainComplicationText.Builder(
-                "StageScope. No saved ring frequency yet. Opens Level."
+                "StageScope. No saved ring frequency yet. Opens Analyzer."
             ).build(),
         )
-            .setTapAction(openLevelPendingIntent(context))
+            .setTapAction(openAnalyzerPendingIntent(context))
             .build()
     } else {
-        val statusWord = if (ring.pinned) "Pinned" else "Last"
+        val pinnedNote = if (ring.pinned) ", pinned" else ""
         MonochromaticImageComplicationData.Builder(
             monochromaticImage = image,
             contentDescription = PlainComplicationText.Builder(
-                "$statusWord ring ${formatFrequencyReadable(ring.frequencyHz)}, saved ${formatWhen(ring.timestampMillis)}."
+                "Most prominent ring ${formatFrequencyReadable(ring.frequencyHz)}$pinnedNote. Last analyzed ${formatWhen(ring.timestampMillis)}."
             ).build(),
         )
             .setTapAction(openRingPendingIntent(context, ring.captureId))
@@ -113,8 +119,8 @@ private fun buildMonochromaticImage(
     }
 }
 
-/** Icon-only / no-data tap target: opens LEVEL without ever starting the microphone on its own. */
-private fun openLevelPendingIntent(context: Context): PendingIntent {
+/** Icon-only / no-data tap target: opens the Analyzer without ever starting the microphone on its own. */
+private fun openAnalyzerPendingIntent(context: Context): PendingIntent {
     val intent = Intent(context, MainActivity::class.java).putExtra(EXTRA_SHORTCUT, SHORTCUT_OPEN_LEVEL)
     return PendingIntent.getActivity(
         context,

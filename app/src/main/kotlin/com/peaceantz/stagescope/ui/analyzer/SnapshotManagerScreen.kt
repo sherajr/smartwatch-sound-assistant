@@ -1,4 +1,4 @@
-package com.peaceantz.stagescope.ui.spectrum
+package com.peaceantz.stagescope.ui.analyzer
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
