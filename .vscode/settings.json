@@ -1,0 +1,17 @@
+{
+    "search.exclude": {
+        "**/build": true,
+        "**/.gradle": true,
+        "**/.kotlin": true,
+        "**/*.apk": true,
+        "**/*.log": true
+    },
+    "files.exclude": {
+        "**/.gradle": true,
+        "**/.kotlin": true
+    },
+    "files.watcherExclude": {
+        "**/build/**": true,
+        "**/.gradle/**": true
+    }
+}
