@@ -1,5 +1,34 @@
 # Status
 
+## Follow-up fix — crown input, centered ring bank, smaller analyzer readout
+
+- Corrected the rotary modifier order on both main screens: the event handler now precedes the
+  focus target. A shared `rotaryOrientation` modifier also uses Wear's hierarchical focus support
+  instead of a one-time focus request, so retained pages can reclaim input when they become active
+  again. The existing orientation lock, rotation math, and debounced persistence are unchanged.
+- Gave the Ring grid/status Column the full available width. Previously, without the optional
+  all-pinned or demo status text, it shrank to the grid width and was placed at the Box's left edge.
+- Reduced the Analyzer frequency/dBFS readout from 16sp to 12sp and set its line height to 14sp,
+  removing the inherited large numeral line box that placed it too low in the circular center.
+- Added Android Compose regression tests for actual crown-event delivery, switching between
+  retained focus branches, returning from a secondary route, and locking/unlocking orientation.
+
+Validation for this follow-up: `git diff --check` passes. The combined
+`:app:testDebugUnitTest :app:lintDebug :app:assembleDebug` command was attempted, but could not
+download Gradle 8.13 (`services.gradle.org`: network unreachable), before project compilation.
+The new instrumentation tests are **not yet run**, and no watch/emulator is attached in this
+environment. Prior successful checks below describe earlier commits, not this follow-up.
+
+On a configured machine, run the existing build/test/lint scripts and
+`gradlew.bat :app:connectedDebugAndroidTest`. Then verify on the watch:
+
+1. Turn the real crown on Analyzer, swipe to Ring and turn it again, then open/close Details and
+   repeat. Lock should block rotation; unlocking should resume without restarting the app.
+2. Check that the five tiles share the watch's horizontal center with 0, 2, and 5 captures, with
+   and without Demo/all-pinned status text.
+3. Check the compact readout with both Hz and kHz values, live/held spectra and larger font settings,
+   including rotated orientations. Confirm it stays clear of the spectrum.
+
 ## Done (this pass — full-bleed Analyzer, circumference level meter, all-5 Ring tiles, crown rotation)
 
 A layout/interaction pass on top of the prior redesign, driven by on-device screenshots showing the

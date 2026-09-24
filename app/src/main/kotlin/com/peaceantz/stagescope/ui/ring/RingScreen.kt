@@ -1,20 +1,14 @@
 package com.peaceantz.stagescope.ui.ring
 
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -26,6 +20,7 @@ import com.peaceantz.stagescope.ui.components.KeepScreenOnEffect
 import com.peaceantz.stagescope.ui.components.ModePageScaffold
 import com.peaceantz.stagescope.ui.components.StateBadge
 import com.peaceantz.stagescope.ui.components.rememberAudioPermissionRequester
+import com.peaceantz.stagescope.ui.rotation.rotaryOrientation
 import com.peaceantz.stagescope.ui.theme.LocalStageScopePalette
 import com.peaceantz.stagescope.ui.theme.chartAnnotationStyle
 
@@ -44,20 +39,12 @@ fun RingScreen(
     KeepScreenOnEffect(enabled = isActive)
     val palette = LocalStageScopePalette.current
 
-    val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) { focusRequester.requestFocus() }
-
     ModePageScaffold(
         modeTitle = "RING",
         onOpenDetails = onOpenDetails,
         modifier = Modifier
             .graphicsLayer { rotationZ = angleDegrees }
-            .focusRequester(focusRequester)
-            .focusable()
-            .onRotaryScrollEvent { event ->
-                if (!orientationLocked) onRotaryDelta(event.verticalScrollPixels)
-                true
-            },
+            .rotaryOrientation(locked = orientationLocked, onRotaryDelta = onRotaryDelta),
         lowerActions = {
             if (isActive) {
                 CompactGlyphButton(glyph = "■", contentDescription = "Stop measuring", onClick = viewModel::stop)
@@ -104,7 +91,13 @@ private fun RingGridContent(
         val rowSpacing = 5.dp
         val tileSize = minOf(maxWidth / 2.7f, (gridHeightBudget - rowSpacing * 2) / 3f).coerceIn(30.dp, 60.dp)
 
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(
+            // The Box spans the page, but a wrap-content Column would be placed at its left edge
+            // whenever neither status line is present. Give the grid the same center in all states.
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             RingTilesGrid(
                 slotCaptureIds = measurement.slotCaptureIds,
                 captures = snap.history,
