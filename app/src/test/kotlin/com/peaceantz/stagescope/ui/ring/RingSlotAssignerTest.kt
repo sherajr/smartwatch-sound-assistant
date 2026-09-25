@@ -53,4 +53,15 @@ class RingSlotAssignerTest {
         val cleared = RingSlotAssigner.update(initial, liveIds = emptyList())
         assertEquals(empty, cleared)
     }
+
+    @Test
+    fun `clearing unpinned captures out of a full bank leaves the pinned ones in their original slots`() {
+        // Mirrors Ring's "Clear unpinned" action: 5 slots full, then only the pinned ids (2 and 4)
+        // remain live -- their slots must not move even though 3 slots emptied at once.
+        val initial = RingSlotAssigner.update(empty, liveIds = listOf(1L, 2L, 3L, 4L, 5L))
+        val afterClearUnpinned = RingSlotAssigner.update(initial, liveIds = listOf(2L, 4L))
+        assertEquals(initial.indexOf(2L), afterClearUnpinned.indexOf(2L))
+        assertEquals(initial.indexOf(4L), afterClearUnpinned.indexOf(4L))
+        assertEquals(2, afterClearUnpinned.count { it != null })
+    }
 }

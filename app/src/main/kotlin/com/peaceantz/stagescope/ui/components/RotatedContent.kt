@@ -9,8 +9,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 /**
  * Visually rotates a whole screen's content around the box center by the shared crown-driven
  * orientation angle -- used for every secondary screen reached from the main pager (Details,
- * Calibration, Appearance, Snapshots, Ring Captures/Details) so the display angle stays consistent
- * across navigation, per `OrientationViewModel`.
+ * Calibration, Appearance, Snapshots, Ring Details) so the display angle stays consistent across
+ * navigation, per `OrientationViewModel`.
  *
  * Purely a render transform: Compose already re-expresses touch and focus input in this box's
  * LOCAL (rotated) coordinate space for its children, so nothing here needs its own gesture handling

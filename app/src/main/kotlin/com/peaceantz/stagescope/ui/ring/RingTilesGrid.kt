@@ -2,7 +2,7 @@ package com.peaceantz.stagescope.ui.ring
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,14 +29,16 @@ import com.peaceantz.stagescope.widget.formatFrequencyReadable
 
 /**
  * All five ring-capture slots at once, in a 2-1-2 arrangement -- replaces the old single giant
- * "hero" frequency: every captured tone is glanceable without opening Captures. [slotCaptureIds]
+ * "hero" frequency: every captured tone is glanceable without navigating anywhere. [slotCaptureIds]
  * (from [RingSlotAssigner]) keeps each populated tile's screen position stable as prominence/
  * recency change, so a tap always lands on the capture the user is looking at. [mostProminentCaptureId]
  * only gets an understated outline -- never a duplicated big number.
  *
- * Interaction: tap a populated tile to toggle ITS pin directly (no need to select it first);
- * long-press to inspect/clear it via the full Captures list. Empty slots show a restrained "—" and
- * do nothing on tap.
+ * Interaction: tap a populated tile to toggle ITS pin directly -- that's the only gesture a tile
+ * responds to now (no long-press, no separate Captures list to select from first). A pinned tile's
+ * fill switches to the theme's held accent (never color-only: the status label also gains a "◆"
+ * prefix) so the pinned/unpinned states stay visually distinct at a glance. Empty slots show a
+ * restrained "—" and do nothing on tap.
  */
 @Composable
 fun RingTilesGrid(
@@ -47,7 +49,6 @@ fun RingTilesGrid(
     tileSize: Dp,
     rowSpacing: Dp = 6.dp,
     onTogglePin: (RingCapture) -> Unit,
-    onInspect: (RingCapture) -> Unit,
 ) {
     val byId = captures.associateBy { it.id }
 
@@ -56,13 +57,13 @@ fun RingTilesGrid(
         verticalArrangement = Arrangement.spacedBy(rowSpacing),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            RingTile(byId[slotCaptureIds.getOrNull(0)], slotCaptureIds.getOrNull(0) == mostProminentCaptureId, autoHoldMs, tileSize, onTogglePin, onInspect)
-            RingTile(byId[slotCaptureIds.getOrNull(1)], slotCaptureIds.getOrNull(1) == mostProminentCaptureId, autoHoldMs, tileSize, onTogglePin, onInspect)
+            RingTile(byId[slotCaptureIds.getOrNull(0)], slotCaptureIds.getOrNull(0) == mostProminentCaptureId, autoHoldMs, tileSize, onTogglePin)
+            RingTile(byId[slotCaptureIds.getOrNull(1)], slotCaptureIds.getOrNull(1) == mostProminentCaptureId, autoHoldMs, tileSize, onTogglePin)
         }
-        RingTile(byId[slotCaptureIds.getOrNull(2)], slotCaptureIds.getOrNull(2) == mostProminentCaptureId, autoHoldMs, tileSize, onTogglePin, onInspect)
+        RingTile(byId[slotCaptureIds.getOrNull(2)], slotCaptureIds.getOrNull(2) == mostProminentCaptureId, autoHoldMs, tileSize, onTogglePin)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            RingTile(byId[slotCaptureIds.getOrNull(3)], slotCaptureIds.getOrNull(3) == mostProminentCaptureId, autoHoldMs, tileSize, onTogglePin, onInspect)
-            RingTile(byId[slotCaptureIds.getOrNull(4)], slotCaptureIds.getOrNull(4) == mostProminentCaptureId, autoHoldMs, tileSize, onTogglePin, onInspect)
+            RingTile(byId[slotCaptureIds.getOrNull(3)], slotCaptureIds.getOrNull(3) == mostProminentCaptureId, autoHoldMs, tileSize, onTogglePin)
+            RingTile(byId[slotCaptureIds.getOrNull(4)], slotCaptureIds.getOrNull(4) == mostProminentCaptureId, autoHoldMs, tileSize, onTogglePin)
         }
     }
 }
@@ -74,7 +75,6 @@ private fun RingTile(
     autoHoldMs: Long,
     tileSize: Dp,
     onTogglePin: (RingCapture) -> Unit,
-    onInspect: (RingCapture) -> Unit,
 ) {
     val palette = LocalStageScopePalette.current
     val tileNumeralStyle = chartAnnotationStyle().copy(fontSize = 9.5.sp)
@@ -102,12 +102,12 @@ private fun RingTile(
     }
     val accent = if (capture.pinned) palette.Held else palette.Live
     val description = "${formatFrequencyReadable(capture.frequencyHz)}, $statusLabel, " +
-        (if (capture.pinned) "pinned. Tap to unpin, long-press for details." else "unpinned. Tap to pin, long-press for details.")
+        (if (capture.pinned) "pinned. Tap to unpin." else "unpinned. Tap to pin.")
 
     Box(
         modifier = Modifier
             .size(tileSize)
-            .background(palette.Surface, CircleShape)
+            .background(if (capture.pinned) palette.HeldDim else palette.Surface, CircleShape)
             .then(
                 if (isMostProminent) {
                     Modifier.border(width = 1.5.dp, color = palette.Live, shape = CircleShape)
@@ -115,10 +115,7 @@ private fun RingTile(
                     Modifier
                 }
             )
-            .combinedClickable(
-                onClick = { onTogglePin(capture) },
-                onLongClick = { onInspect(capture) },
-            )
+            .clickable(onClick = { onTogglePin(capture) })
             .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {

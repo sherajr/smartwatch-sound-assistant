@@ -1,5 +1,101 @@
 # Status
 
+## Simplified Ring interactions + fixed Calibration overlap
+
+Four changes: "Clear unpinned" is now a second button right on the Ring page next to Start/Stop;
+a pinned tile's fill color now visibly differs from an unpinned one; the separate Captures screen
+is gone (all routine capture management is on the Ring page itself, with "Clear all" moved to Ring
+Details); and Calibration's reference-reading value/buttons no longer overlap.
+
+### 1. "Clear unpinned" on the Ring page (`ui/ring/RingScreen.kt`)
+- Added a second `CompactGlyphButton` ("✕") to Ring's lower action row, alongside Start/Stop —
+  still within the round-screen two-button-per-row limit. Wired directly to the existing
+  `RingViewModel.clearUnpinned()`/`RingTracker.clearUnpinned()` (unchanged — already removed only
+  unpinned captures regardless of LIVE/HELD/EXPIRED state, and already dropped any in-flight track
+  linked to a cleared capture so a continuing tone must re-confirm rather than instantly
+  reappearing). The button is disabled, not hidden, when `RingSnapshot.history` has no unpinned
+  entries, so its position never shifts. No confirmation step and no navigation, per spec — this is
+  a same-page, reversible-by-nature action (a cleared unpinned tone can simply reappear if it's
+  still sounding).
+
+### 2. Pinned tiles get a visibly different fill (`ui/ring/RingTilesGrid.kt`)
+- `RingTile`'s background now switches between `palette.Surface` (unpinned) and `palette.HeldDim`
+  (pinned) — previously it stayed `palette.Surface` regardless of pin state, so only the small
+  status-label color/glyph changed, which on-device was easy to miss. `palette.HeldDim` (not the
+  brighter `palette.Held`) was chosen specifically so the existing near-white primary-text color
+  stays readable against it in all 5 themes, without touching the text color itself. The existing
+  "◆" prefix on the status label remains as the non-color cue. The most-prominent outline
+  (`palette.Live`, unchanged) stays a completely different visual channel (border vs. fill) from
+  the pinned state, so a tile can be most-prominent, pinned, both, or neither without ambiguity —
+  confirmed on-device (see below).
+
+### 3. Removed the separate Captures screen (`ui/ring/RingCapturesScreen.kt` deleted)
+- Deleted the screen, its `ROUTE_RING_CAPTURES` route/composable, `RingScreen`'s `onOpenCaptures`
+  parameter, and `RingTilesGrid`'s `combinedClickable`/`onLongClick`/`onInspect` plumbing — a tap is
+  now the tile's only gesture (`clickable`, not `combinedClickable`). `RingDetailsScreen` gained
+  "Clear all" (confirm-gated, explicitly labeled "also removes pinned") moved over from the old
+  screen's `clearAllArmed` pattern, alongside the pre-existing "Clear unpinned". Updated every
+  accessibility description, doc comment, README passage, and `docs/MEASUREMENTS.md` passage
+  (including the manual checklist) that referenced opening Captures, long-pressing a tile, or
+  selecting a frequency before pinning.
+
+### 4. Fixed Calibration's reference-reading overlap (`ui/settings/CalibrationScreen.kt`)
+- Root cause: `ReferenceReadingControl` emitted a `Box` (the value) followed by a `Row` (the ±
+  buttons) as two *sibling* composables with no enclosing `Column` — inside a `ScalingLazyColumn`
+  `item {}`, sibling root composables don't stack, they overlap at the item's own top-left, which is
+  exactly what let the ± buttons cover the numeric reading. Fixed by wrapping both in a `Column`
+  with explicit `Arrangement.spacedBy` and centering; the value now uses `frequencyStyle()`
+  (30sp, centered, `fillMaxWidth()`) so it's unambiguously the primary readout, with the rotary/focus
+  modifiers moved onto the value `Text` itself (same scope as before, just no longer a bare `Box`).
+  The exact same sibling-overlap shape existed in the Measure step's "Sampling…"
+  text/progress-bar/status block (three siblings in one `item {}`) — fixed the same way with a
+  `Column`. Audited every other `item {}` in the file; nothing else emits more than one root
+  composable outside an explicit `Row`/`Column`. The "Reference meter reading" label was already a
+  separate preceding list item, so the required label → value+unit → button row → instructions
+  → actions order falls out without further changes.
+
+### On-device verification (same connected Pixel Watch 5-class device as prior passes)
+- `-r` reinstall (preserves app data) + launch via `adb`, confirmed as the resumed foreground
+  activity with no crash in logcat.
+- Per this project's documented synthetic-touch limitation, Ring's tap-to-pin/unpin and
+  Calibration's ± buttons could not be exercised via `adb input tap`. Verified instead via
+  `EXTRA_SHORTCUT=measure` (starts the shared session) + `EXTRA_SHORTCUT=ring`, with Demo mode
+  toggled on through `run-as`-written `settings.json` and the watch's own pre-existing
+  `ring_bank.json` (3 previously-pinned captures from earlier sessions) providing a live mix of
+  pinned/unpinned tiles. A screenshot confirmed: all 5 tiles rendered 2-1-2; the 3 restored-pinned
+  tiles showed the new reddish `HeldDim` fill with the "◆" cue while the 2 live unpinned demo tiles
+  stayed dark; the most-prominent tile's green outline was clearly a different visual channel from
+  the pinned fill; the lower row showed exactly two full, unclipped circular buttons (Stop, Clear
+  unpinned) with Clear unpinned correctly enabled (unpinned captures were present). Settings were
+  restored to their prior value (demo mode off) and the app force-stopped afterward, matching this
+  project's established practice of leaving the device in its prior state. Calibration has no
+  shortcut route (by design, per `ShortcutIntents.kt`) and Details/Calibrate requires a real tap to
+  reach, so its fix is verified by layout reasoning + code review, not an on-device screenshot —
+  same limitation prior passes recorded for real touch interaction.
+- Noted, not investigated further: after this session's testing, the watch's `ring_bank.json`
+  differed from what this pass's own code wrote (no code path other than explicit
+  `pin`/`unpin`/`clearSelected`/`clearAll` persists that file, and none of those were invoked via
+  shortcut). Most likely explanation is the physical watch being tapped directly by its owner during
+  the session (genuine touch works fine on this hardware; only synthetic `adb`-injected touch does
+  not) rather than anything introduced by this pass — flagged here for visibility, not corrected,
+  since overwriting it could discard real, intentional pin changes.
+
+### Checks run this session
+- `scripts\test.ps1` (`gradlew testDebugUnitTest`) → BUILD SUCCESSFUL. Added regression coverage:
+  `RingTrackerTest` — five captures/two pinned survive `clearUnpinned()` exactly, `clearUnpinned()`
+  on an empty or fully-pinned bank removes nothing, and two toggles (pin then unpin) on the same
+  capture return it to unpinned; `RingSlotAssignerTest` — clearing unpinned captures out of a full
+  bank leaves the still-pinned ones in their original slots.
+- `scripts\lint.ps1` forced fresh (`--rerun-tasks`, not the cached report) → BUILD SUCCESSFUL, **0
+  errors, 12 warnings**, all pre-existing dependency-freshness/deprecation notices — none introduced
+  by this pass.
+- `scripts\build.ps1` → BUILD SUCCESSFUL. APK: `app\build\outputs\apk\debug\app-debug.apk`.
+- Found, did not fix (out of scope for this pass): `scripts\install-launch.ps1` throws when exactly
+  one device is attached — PowerShell collapses a single-element pipeline result to a bare string,
+  so `$deviceSerials[0]` indexes into the *string's characters* instead of an array, picking the
+  single letter "a". Installed/launched directly via `adb install -r` / `adb shell am start` instead
+  this session.
+
 ## Follow-up fix — crown input, centered ring bank, smaller analyzer readout
 
 - Corrected the rotary modifier order on both main screens: the event handler now precedes the

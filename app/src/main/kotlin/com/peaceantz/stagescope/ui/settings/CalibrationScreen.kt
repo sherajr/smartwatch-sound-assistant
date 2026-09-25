@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,10 +16,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
@@ -30,6 +33,7 @@ import com.peaceantz.stagescope.ui.components.KeepScreenOnEffect
 import com.peaceantz.stagescope.ui.components.StateBadge
 import com.peaceantz.stagescope.ui.components.rememberAudioPermissionRequester
 import com.peaceantz.stagescope.ui.theme.LocalStageScopePalette
+import com.peaceantz.stagescope.ui.theme.frequencyStyle
 
 @Composable
 fun CalibrationScreen(viewModel: CalibrationViewModel, onExit: () -> Unit) {
@@ -167,6 +171,12 @@ private fun enterReferenceStep(
     }
 }
 
+/**
+ * The value and its +/- controls must live inside one Column: a lazy-list `item {}` that emits
+ * multiple root composables side by side (the previous Box-then-Row shape) doesn't stack them --
+ * it lets them overlap at the item's own top-left, which is what let the +/- buttons cover the
+ * numeric reading. A Column with explicit spacing is what actually reserves separate space for each.
+ */
 @Composable
 private fun ReferenceReadingControl(viewModel: CalibrationViewModel) {
     val targetDb by viewModel.targetDb.collectAsStateWithLifecycle()
@@ -174,21 +184,29 @@ private fun ReferenceReadingControl(viewModel: CalibrationViewModel) {
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .focusRequester(focusRequester)
-            .focusable()
-            .onRotaryScrollEvent { event ->
-                viewModel.adjustTarget(if (event.verticalScrollPixels > 0) 0.5 else -0.5)
-                true
-            },
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("${"%.1f".format(targetDb)} dB SPL", color = palette.Live)
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-        DetailButton(onClick = { viewModel.adjustTarget(-1.0) }) { Text("−") }
-        DetailButton(onClick = { viewModel.adjustTarget(1.0) }) { Text("+") }
+        Text(
+            text = "${"%.1f".format(targetDb)} dB SPL",
+            color = palette.Live,
+            style = frequencyStyle(),
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .focusRequester(focusRequester)
+                .focusable()
+                .onRotaryScrollEvent { event ->
+                    viewModel.adjustTarget(if (event.verticalScrollPixels > 0) 0.5 else -0.5)
+                    true
+                },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            DetailButton(onClick = { viewModel.adjustTarget(-1.0) }) { Text("−") }
+            DetailButton(onClick = { viewModel.adjustTarget(1.0) }) { Text("+") }
+        }
     }
 }
 
@@ -212,12 +230,16 @@ private fun measureStep(
         if (sampling != null) {
             val s = sampling!!
             val fraction = (s.elapsedMs.toFloat() / s.totalMs.toFloat()).coerceIn(0f, 1f)
-            Text("Sampling… ${(fraction * 100).toInt()}%", color = MaterialTheme.colorScheme.onBackground)
-            SamplingProgressBar(fraction, s.clippedSoFar, palette)
-            Text(
-                text = if (s.clippedSoFar) "Clipping detected -- lower the level" else "Live raw: ${"%.1f".format(s.liveRawRmsDbfs)} dBFS",
-                color = if (s.clippedSoFar) palette.Held else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // Same overlap trap as ReferenceReadingControl: these three pieces are siblings emitted
+            // from one lazy-list item, so they need an explicit Column to stack rather than overlap.
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Sampling… ${(fraction * 100).toInt()}%", color = MaterialTheme.colorScheme.onBackground)
+                SamplingProgressBar(fraction, s.clippedSoFar, palette)
+                Text(
+                    text = if (s.clippedSoFar) "Clipping detected -- lower the level" else "Live raw: ${"%.1f".format(s.liveRawRmsDbfs)} dBFS",
+                    color = if (s.clippedSoFar) palette.Held else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         } else {
             val live by viewModel.liveRawRmsDbfs.collectAsStateWithLifecycle()
             Text("Live raw: ${"%.1f".format(live)} dBFS", color = MaterialTheme.colorScheme.onSurfaceVariant)

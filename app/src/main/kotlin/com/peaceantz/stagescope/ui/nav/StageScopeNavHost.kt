@@ -22,7 +22,6 @@ import com.peaceantz.stagescope.ui.components.RotatedContent
 import com.peaceantz.stagescope.ui.components.rememberAudioPermissionRequester
 import com.peaceantz.stagescope.ui.help.WatchShortcutsHelpScreen
 import com.peaceantz.stagescope.ui.main.CaptureSessionViewModel
-import com.peaceantz.stagescope.ui.ring.RingCapturesScreen
 import com.peaceantz.stagescope.ui.ring.RingDetailsScreen
 import com.peaceantz.stagescope.ui.ring.RingScreen
 import com.peaceantz.stagescope.ui.ring.RingViewModel
@@ -38,7 +37,6 @@ const val ROUTE_MAIN = "main"
 const val ROUTE_ANALYZER_DETAILS = "analyzerDetails"
 const val ROUTE_SNAPSHOTS = "snapshots"
 const val ROUTE_RING_DETAILS = "ringDetails"
-const val ROUTE_RING_CAPTURES = "ringCaptures"
 const val ROUTE_CALIBRATION = "calibration"
 const val ROUTE_APPEARANCE = "appearance"
 const val ROUTE_WATCH_SHORTCUTS_HELP = "watchShortcutsHelp"
@@ -132,7 +130,6 @@ fun StageScopeNavHost(
                                     orientationLocked = orientationLocked,
                                     onRotaryDelta = orientationViewModel::onRotaryDelta,
                                     onOpenDetails = { navController.navigate(ROUTE_RING_DETAILS) },
-                                    onOpenCaptures = { navController.navigate(ROUTE_RING_CAPTURES) },
                                 )
                             }
                         }
@@ -197,23 +194,6 @@ fun StageScopeNavHost(
             val angleDegrees by orientationViewModel.angleDegrees.collectAsStateWithLifecycle()
             RotatedContent(angleDegrees) {
                 RingDetailsScreen(viewModel = ringViewModel, orientationViewModel = orientationViewModel)
-            }
-        }
-
-        composable(ROUTE_RING_CAPTURES) { entry ->
-            val mainEntry = remember(entry) { navController.getBackStackEntry(ROUTE_MAIN) }
-            val sessionViewModel: CaptureSessionViewModel = viewModel(viewModelStoreOwner = mainEntry) {
-                CaptureSessionViewModel(container)
-            }
-            val ringViewModel: RingViewModel = viewModel(viewModelStoreOwner = mainEntry) {
-                RingViewModel(container, sessionViewModel.session)
-            }
-            val orientationViewModel: OrientationViewModel = viewModel(viewModelStoreOwner = mainEntry) {
-                OrientationViewModel(container)
-            }
-            val angleDegrees by orientationViewModel.angleDegrees.collectAsStateWithLifecycle()
-            RotatedContent(angleDegrees) {
-                RingCapturesScreen(viewModel = ringViewModel)
             }
         }
 

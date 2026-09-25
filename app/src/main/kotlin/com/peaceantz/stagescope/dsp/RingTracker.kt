@@ -156,8 +156,19 @@ class RingTracker(
     /** Unpins [captureId] only -- every other capture's pinned state is left untouched. */
     fun unpin(captureId: Long) = setPinned(captureId, false)
 
+    /**
+     * Replaces the capture with a copy rather than mutating [RingCapture.pinned] in place. A
+     * previously-returned [RingSnapshot] holds a reference to the SAME `RingCapture` instance, so
+     * mutating it in place retroactively changes that older, already-published snapshot too --
+     * which made the "before" and "after" snapshots structurally equal by the time
+     * `RingViewModel` assigned the new one to its `MutableStateFlow`, causing `StateFlow` to
+     * silently drop the update (it conflates values that compare `equals()`), so a tap on a Ring
+     * tile didn't visibly toggle until some unrelated change (a live frame, a different tile)
+     * forced a genuinely different value through. Copying leaves every earlier snapshot untouched.
+     */
     fun setPinned(captureId: Long, pinned: Boolean) {
-        captures.find { it.id == captureId }?.pinned = pinned
+        val index = captures.indexOfFirst { it.id == captureId }
+        if (index >= 0) captures[index] = captures[index].copy(pinned = pinned)
     }
 
     fun selectCapture(captureId: Long) {

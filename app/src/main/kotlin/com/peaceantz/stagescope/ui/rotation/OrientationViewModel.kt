@@ -12,8 +12,8 @@ import kotlinx.coroutines.launch
 
 /**
  * One shared crown-driven rotation angle for the whole app -- the Analyzer/Ring pages and every
- * secondary screen reached from them (Details, Calibration, Appearance, Snapshots, Ring
- * Captures/Details) all read the same value, scoped to the `"main"` nav backstack entry (see
+ * secondary screen reached from them (Details, Calibration, Appearance, Snapshots, Ring Details)
+ * all read the same value, scoped to the `"main"` nav backstack entry (see
  * StageScopeNavHost) so it survives page swipes and pushed routes exactly like [CaptureSession][
  * com.peaceantz.stagescope.audio.CaptureSession] does.
  *

@@ -250,6 +250,32 @@ class RingTrackerTest {
     }
 
     @Test
+    fun `pinning a capture does not retroactively mutate a previously returned snapshot`() {
+        // Regression test for a real on-device bug: RingViewModel publishes snapshots through a
+        // MutableStateFlow, which silently drops an update whose value compares `equals()` to the
+        // currently-held one. If pin()/unpin() mutated the shared RingCapture object in place, an
+        // already-published (old) snapshot's copy of that capture would change too, making the
+        // "before" and "after" snapshots look identical -- so a tap on a Ring tile never visibly
+        // toggled until some unrelated change forced a genuinely different value through.
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        val confirmed = feedSteady(tracker, clock, bin = 150, totalMs = 400)
+        val id = confirmed.heroCapture!!.id
+
+        val snapshotTakenBeforePin = tracker.currentSnapshot()
+        val captureFromOldSnapshot = snapshotTakenBeforePin.history.first { it.id == id }
+        assertFalse(captureFromOldSnapshot.pinned)
+
+        tracker.pin(id)
+
+        assertFalse(
+            "a snapshot captured before pin() must remain frozen, not be mutated by the later call",
+            captureFromOldSnapshot.pinned,
+        )
+        assertTrue("the new snapshot must reflect the pin", tracker.currentSnapshot().history.first { it.id == id }.pinned)
+    }
+
+    @Test
     fun `clear removes the selected capture and releases selection`() {
         val clock = FakeClock()
         val tracker = RingTracker(clock = clock)
@@ -494,6 +520,76 @@ class RingTrackerTest {
         assertEquals(1, after.history.size)
         assertEquals(ids[0], after.history[0].id)
         assertTrue(after.history[0].pinned)
+    }
+
+    @Test
+    fun `with five captures and two pinned, clearing unpinned leaves exactly those two`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        var last: RingSnapshot? = null
+        var elapsed = 0L
+        while (elapsed < 400) {
+            last = tracker.update(frame(50 to -20.0, 100 to -20.0, 150 to -20.0, 200 to -20.0, 250 to -20.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        val ids = last!!.history.map { it.id }.sorted()
+        assertEquals(5, ids.size)
+        val pinnedIds = setOf(ids[1], ids[3])
+        pinnedIds.forEach(tracker::pin)
+
+        tracker.clearUnpinned()
+        val after = tracker.currentSnapshot()
+        assertEquals("only the two pinned captures should survive", pinnedIds, after.history.map { it.id }.toSet())
+        assertTrue(after.history.all { it.pinned })
+    }
+
+    @Test
+    fun `clear unpinned on an empty bank is harmless`() {
+        val tracker = RingTracker(clock = FakeClock())
+        tracker.clearUnpinned()
+        val after = tracker.currentSnapshot()
+        assertTrue(after.history.isEmpty())
+    }
+
+    @Test
+    fun `clear unpinned on a fully pinned bank removes nothing`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        var last: RingSnapshot? = null
+        var elapsed = 0L
+        while (elapsed < 400) {
+            last = tracker.update(frame(50 to -20.0, 100 to -20.0, 150 to -20.0, 200 to -20.0, 250 to -20.0))
+            clock.advance(20)
+            elapsed += 20
+        }
+        for (capture in last!!.history) tracker.pin(capture.id)
+        val idsBefore = tracker.currentSnapshot().history.map { it.id }.toSet()
+
+        tracker.clearUnpinned()
+        val after = tracker.currentSnapshot()
+        assertEquals(idsBefore, after.history.map { it.id }.toSet())
+        assertTrue(after.history.all { it.pinned })
+    }
+
+    @Test
+    fun `pinning then unpinning the same capture twice returns it to unpinned`() {
+        val clock = FakeClock()
+        val tracker = RingTracker(clock = clock)
+        val confirmed = feedSteady(tracker, clock, bin = 150, totalMs = 400)
+        val id = confirmed.heroCapture!!.id
+
+        // Simulates two taps on the same tile: tap 1 pins (unpinned -> pin), tap 2 unpins (pinned -> unpin).
+        fun toggle() {
+            val pinnedNow = tracker.currentSnapshot().history.first { it.id == id }.pinned
+            if (pinnedNow) tracker.unpin(id) else tracker.pin(id)
+        }
+
+        assertFalse(tracker.currentSnapshot().history.first { it.id == id }.pinned)
+        toggle()
+        assertTrue("first tap should pin", tracker.currentSnapshot().history.first { it.id == id }.pinned)
+        toggle()
+        assertFalse("second tap should unpin the same capture", tracker.currentSnapshot().history.first { it.id == id }.pinned)
     }
 
     // --- Resolution-aware dedup tolerance ---

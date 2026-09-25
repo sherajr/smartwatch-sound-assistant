@@ -15,12 +15,14 @@ doubles as the link to that page's Details/Actions screen (tap "ANALYZER ›" / 
   exact selected band, never a different one. Start/Stop is the primary action; Freeze/Resume holds
   the spectrum only (the center level and Ring detection keep running — a "SPECTRUM HELD" tag makes
   that explicit) — peak hold, saved snapshots, and snapshot comparison live in Details.
-- **Ring** — a five-slot bank of confirmed persistent tones, each independently pinnable. The hero
-  shows the currently *selected* capture with an explicit state (SEARCHING / DETECTING / LIVE /
-  HELD / HISTORICAL / PINNED / PAUSED); "Captures N/5 ›" opens the full bank list to select, pin, or
-  unpin any of them individually — pinning one never unpins another. This is a conservative
-  heuristic based on spectral contrast and persistence over time — it does not identify feedback,
-  suggest EQ, or distinguish a ring from a sustained musical tone.
+- **Ring** — a five-slot bank of confirmed persistent tones, shown as five tiles at once (LIVE /
+  HELD / SAVE), each independently pinnable — tap a populated tile to pin it (its fill switches to
+  the theme's held accent) or tap again to unpin it; pinning one never unpins another. "Clear
+  unpinned" sits next to Start/Stop on the Ring page itself for an immediate, no-confirmation sweep
+  of everything unpinned; Ring Details has "Clear all", which also removes pinned captures, behind a
+  confirm step. This is a conservative heuristic based on spectral contrast and persistence over
+  time — it does not identify feedback, suggest EQ, or distinguish a ring from a sustained musical
+  tone.
 
 Demo mode (a deterministic synthetic signal through the same DSP pipeline, no microphone use) and
 manual reference-SPL calibration are both reached from Analyzer's Details screen.
@@ -101,7 +103,7 @@ Filtered to StageScope's own process plus crash traces.
 - **Demo mode** (Analyzer's Details screen) runs the exact same analysis code on a synthetic signal — useful for trying the UI without a live mic, or on an emulator. Every demo screen and saved demo snapshot is clearly labeled; demo and real snapshots/captures are never mixed into the same comparison or saved surface silently.
 - **Calibration** (Analyzer's Details screen → Calibrate SPL) is a guided flow that aligns Analyzer's RMS reading to a trusted SPL meter reading, once, for the current input configuration. It relabels the reading "Estimated SPL" — it is not a certified measurement, and it's cleared automatically if the microphone configuration changes. See docs/MEASUREMENTS.md for exactly what this can and can't correct for.
 - Measurement sessions keep the screen on for up to 2 minutes at a time (visible countdown, in Analyzer's Details), then stop automatically; press Start again to continue. Backgrounding the app or turning the screen off also stops capture — you'll see "Paused" and need to press Start again.
-- **Ring's five-slot bank**: up to five distinct confirmed frequencies at once, each independently pinnable (`Pin`/`Unpin` per capture — pinning one never touches another). When full, a new tone only takes a slot if an existing one has expired (unpinned, past its auto-hold window) or is clearly weaker than the new candidate; if all five are pinned, the Ring page says so plainly. "Clear unpinned" and "Clear all" (behind a confirm step) are both available from the Captures list.
+- **Ring's five-slot bank**: up to five distinct confirmed frequencies at once, each independently pinnable — tap a populated tile on the Ring page to pin/unpin it directly (pinning one never touches another). When full, a new tone only takes a slot if an existing one has expired (unpinned, past its auto-hold window) or is clearly weaker than the new candidate; if all five are pinned, the Ring page says so plainly. "Clear unpinned" is right on the Ring page next to Start/Stop, works immediately with no confirmation, and only ever removes unpinned captures; "Clear all" (which also removes pinned captures, behind a confirm step) lives in Ring Details.
 - **The watch-face complication** always shows the *most prominent currently-confirmed* ring — chosen purely by spectral strength with light hysteresis, never by "pinned, else most recent." Selecting or pinning a capture in-app never changes what the complication shows. It reads cached, historical data only and never opens the microphone, labeled "Last analyzed" rather than implying live listening.
 
 ## Project layout

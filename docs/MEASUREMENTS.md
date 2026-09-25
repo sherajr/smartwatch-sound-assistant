@@ -104,7 +104,7 @@ saved. Level readings now show Estimated SPL." success screen with a Done action
   negative) so continuous rotation never jumps at the 0/360 seam; only the persisted/settled value
   is normalized (`OrientationMath.normalize`) via `AppSettings.instrumentOrientationDegrees`, written
   800ms after the crown stops moving (never per tick). Every secondary screen (Details, Calibration,
-  Appearance, Snapshots, Ring Captures/Details) visually inherits the same angle
+  Appearance, Snapshots, Ring Details) visually inherits the same angle
   (`ui/components/RotatedContent.kt`) without any crown rewiring of its own — their own rotary
   behavior (scroll a list, adjust a focused number) is untouched, since rotary events are scroll
   deltas, not screen positions, and are unaffected by a visual rotation.
@@ -127,7 +127,7 @@ saved. Level readings now show Estimated SPL." success screen with a Done action
 4. **Bank capacity (five slots, `maxCaptures`)** — a confirming tone fills an empty slot first; once full, it evicts the oldest **expired, unpinned** slot if one exists, else the **weakest unpinned** slot but only if it's at least `replacementMarginDb` (6 dB) stronger (avoiding constant churn between similar-strength tones); a pinned slot is never evicted, and if all five are pinned the tone is confirmed as a live track but simply doesn't claim a bank slot (`RingSnapshot.allSlotsPinned` flags this so the UI can say "All 5 pinned — unpin or clear one to capture another").
 5. **Selection vs. pin vs. most-prominent** — three independent concepts, deliberately not conflated:
    - **Selected capture** (`selectCapture`/`heroCapture`) — whichever the user is currently looking at on the Ring page. State is SEARCHING (nothing yet) / DETECTING (an unconfirmed track exists) / LIVE (matched within the last `maxDropoutMs`) / HELD (past that but within `autoHoldMs`, default 20s, configurable 10/20/30s) / EXPIRED (past `autoHoldMs`, unpinned — shown "HISTORICAL") / PINNED (stays selected regardless of hold expiry) / PAUSED.
-   - **Pinned** (`pin(id)`/`unpin(id)`/`setPinned(id, Boolean)`) — **independent per capture**. Pinning one never unpins another; any of the 0–5 slots can be pinned in any combination. Pinned captures are persisted (id/frequency/save-time, never audio) via `RingBankRepository` and restored at startup via `RingTracker.restoreCapture()`, marked `restoredFromDisk` (shown "SAVED" in the Captures list) until a live detection updates them again, with ids that never collide with a freshly-confirmed capture's id.
+   - **Pinned** (`pin(id)`/`unpin(id)`/`setPinned(id, Boolean)`) — **independent per capture**. Pinning one never unpins another; any of the 0–5 slots can be pinned in any combination. Tapping a populated tile on the Ring page toggles its pin directly — a pinned tile's fill switches to the theme's held-accent color (`palette.HeldDim`) with a "◆" prefix on its status label as a non-color cue, and switches back on the next tap. Pinned captures are persisted (id/frequency/save-time, never audio) via `RingBankRepository` and restored at startup via `RingTracker.restoreCapture()`, marked `restoredFromDisk` (shown "SAVE" on its tile) until a live detection updates them again, with ids that never collide with a freshly-confirmed capture's id.
    - **Most prominent** (`RingSnapshot.mostProminentCaptureId`) — the strongest currently-**LIVE** confirmed capture by smoothed spectral prominence, entirely independent of the selected capture and of any pinned flags. Switches promptly (no dwell) to a clearly stronger candidate (≥`prominenceSwitchMarginDb`, 4 dB); a near-equal candidate must lead for `prominenceDwellMs` (600ms) before taking over — hysteresis against flapping between two similar tones. Sticky when nothing is currently live (keeps returning the last id it held, so callers can show it as cached/"Last"), and cleared when that specific capture is removed by a clear or an eviction. **This — not "pinned, else most recent" — is what the watch-face complication shows** (see below); manually selecting or pinning a capture never redefines it.
 
 **Ring page display**: `ui/ring/RingTilesGrid.kt` shows all five slots at once, arranged 2-1-2, rather
@@ -135,11 +135,16 @@ than the old single "hero" frequency + a separate Captures link. Screen position
 `RingSlotAssigner`, which assigns each currently-live capture id to a slot and leaves it there for as
 long as that capture exists — **not** the same order as `RingSnapshot.history` (sorted by
 `lastSeenAtMs`, which changes on every live frame and would otherwise reshuffle tiles constantly
-while the user is trying to tap one). A tap on a populated tile toggles that capture's pin directly
-(`pin`/`unpin`); a long-press selects it and opens the Captures list for inspection/clearing. The
-most-prominent capture gets an understated outline on whichever slot it currently occupies — never a
-duplicated large number. An empty slot shows a restrained "—" (bordered, not solid black-on-black, so
-it stays visibly present rather than disappearing against the screen background).
+while the user is trying to tap one). A tap on a populated tile is the only gesture it responds to —
+it toggles that capture's pin directly (`pin`/`unpin`); there is no separate Captures screen and no
+long-press. Bank management lives right on the Ring page ("Clear unpinned", next to Start/Stop —
+works immediately, no confirmation, only ever removes unpinned captures) and in Ring Details ("Clear
+all", behind a confirm step, which also removes pinned captures). The most-prominent capture gets an
+understated outline on whichever slot it currently occupies — never a duplicated large number, and
+kept visually distinct from the pinned fill color (outline vs. fill are two different visual
+channels, so a tile can be most-prominent, pinned, both, or neither without ambiguity). An empty slot
+shows a restrained "—" (bordered, not solid black-on-black, so it stays visibly present rather than
+disappearing against the screen background).
 
 All timing uses an injected `MonotonicClock` (`System.nanoTime()`-based in production), never a frame counter, so behavior is identical whether frames arrive at 10Hz or in a burst. Full behavioral contract — jitter, transient rejection, dwell timing, dropout tolerance, held-frequency freezing, auto-hold expiry/reselection, recurring-tone dedup (resolution-aware), five simultaneous/sequential captures, a sixth candidate's eviction rules, all-five-pinned behavior, clear-unpinned, most-prominent selection/hysteresis/stickiness, restore-from-disk id stability — is in `RingTrackerTest`, including a full-pipeline acceptance test (real FFT + synthesized PCM) for the spec's "2.15kHz for one second, then silence, then a separate 3.2kHz tone" scenario.
 
@@ -182,12 +187,13 @@ Centralized in `dsp/FrequencyBands.kt` (Rumble 20–80 Hz, Body 80–250 Hz, War
 - [ ] Analyzer Details → Save 5 snapshots, confirm a 6th is refused; rename one, delete one; compare
       two with matching config (dashed outline draws) and mismatched config (shows "Incompatible
       comparison").
-- [ ] Ring, Demo mode ON: within ~1s of a synthetic tone starting, the selected capture shows LIVE
-      with a frequency; after it fades out, HELD with the same frequency; "Captures N/5 ›" reflects
-      the count. Pin it from the Captures list; wait past the auto-hold window (Ring Details lets you
-      set 10s for a faster check) — pinned capture must NOT be replaced even once a new candidate
-      would otherwise qualify. Unpin it (independently — confirm a second pinned capture is
-      unaffected), then Clear all (behind the confirm step) — hero returns to SEARCHING/DETECTING.
+- [ ] Ring, Demo mode ON: within ~1s of a synthetic tone starting, its tile shows LIVE with a
+      frequency; after it fades out, HELD with the same frequency. Tap the tile to pin it (fill
+      switches to the held accent color, "◆" appears on the status label); wait past the auto-hold
+      window (Ring Details lets you set 10s for a faster check) — pinned capture must NOT be replaced
+      even once a new candidate would otherwise qualify. Tap again to unpin (independently — confirm
+      a second pinned capture is unaffected), then Ring Details → Clear all (behind the confirm step)
+      — bank returns to empty.
 - [ ] Ring: play (or use Demo's) two simultaneous well-separated tones — confirm both are captured as
       distinct entries, not merged; confirm five total captures can coexist; confirm a sixth
       candidate only replaces an expired-unpinned or a sufficiently-weaker unpinned slot, and that
@@ -202,6 +208,11 @@ Centralized in `dsp/FrequencyBands.kt` (Rumble 20–80 Hz, Body 80–250 Hz, War
       the "Calibration saved" success screen → Done returns to Analyzer now showing "Estimated SPL".
       Confirm "Use dBFS" at Prepare exits without calibrating. Recalibrate and Clear calibration from
       Analyzer Details both work.
+- [ ] Calibration's "Enter reference reading" step: the −/+ buttons never overlap the numeric value
+      or its "dB SPL" unit — label, value, and button row each occupy separate, fully visible space.
+      Repeat at the system's largest font size and confirm nothing clips or overlaps, and that the
+      list still scrolls to reach Back/Continue. Same check for the Measure step's "Sampling…"
+      text/progress-bar/status group and the Review step's Retry/Save row.
 - [ ] Appearance (via Analyzer Details): switch through all 5 themes, confirm the Analyzer dial, Ring
       page, and buttons all visibly change (not just the picker itself); toggle Dim with each theme
       selected.
@@ -221,10 +232,15 @@ Centralized in `dsp/FrequencyBands.kt` (Rumble 20–80 Hz, Body 80–250 Hz, War
       visible gap between the meter and the spectrum. Confirm the whole boundary at several crown
       rotation angles, not just the unrotated screenshot — a rotated view must not reveal a button,
       tile, or text line that was only safe at 0°.
-- [ ] Ring page shows all 5 slots at once without opening Captures; tap a populated tile toggles its
-      pin immediately (icon/color updates); long-press opens Captures with that capture selected.
-      Confirm tile positions do NOT shuffle as prominence/recency changes live, and that the
-      most-prominent tile's outline moves without moving the tile itself.
+- [ ] Ring page shows all 5 slots at once; tap a populated tile toggles its pin immediately (fill
+      color and status-label cue update together; tapping the same tile again reverses it). Confirm
+      tile positions do NOT shuffle as prominence/recency changes live, and that the most-prominent
+      tile's outline moves without moving the tile itself, and stays visually distinct from a pinned
+      tile's fill. "Clear unpinned" (Ring page, next to Start/Stop) removes every unpinned capture
+      immediately with no confirmation, is disabled when nothing is unpinned, and leaves pinned
+      captures in their existing tile positions; a tone that keeps sounding through a clear is only
+      recaptured after re-confirming (not restored instantly from stale state). Ring Details → "Clear
+      all" removes everything, including pinned captures, behind a confirm step.
 - [ ] Turn the crown on Analyzer and on Ring: the whole instrument (text, spectrum, meter, buttons,
       tiles) rotates together, smoothly, in both directions, through a full 360° with no jump at the
       seam. Swiping ANALYZER↔RING and the system back/dismiss gesture still work normally at a

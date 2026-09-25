@@ -31,13 +31,17 @@ fun RingScreen(
     orientationLocked: Boolean,
     onRotaryDelta: (Float) -> Unit,
     onOpenDetails: () -> Unit,
-    onOpenCaptures: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val isActive by viewModel.isActive.collectAsStateWithLifecycle()
     val requestStart = rememberAudioPermissionRequester(onGranted = viewModel::start)
     KeepScreenOnEffect(enabled = isActive)
     val palette = LocalStageScopePalette.current
+
+    // Drives whether "Clear unpinned" is enabled -- disabled rather than hidden, so the control's
+    // position in the lower action row never shifts as the bank fills/empties.
+    val hasUnpinned = (state as? RingUiState.Measuring)
+        ?.measurement?.snapshot?.history?.any { !it.pinned } == true
 
     ModePageScaffold(
         modeTitle = "RING",
@@ -51,6 +55,12 @@ fun RingScreen(
             } else {
                 CompactGlyphButton(glyph = "▶", contentDescription = "Start measuring", onClick = requestStart)
             }
+            CompactGlyphButton(
+                glyph = "✕",
+                contentDescription = "Clear unpinned measurements",
+                onClick = viewModel::clearUnpinned,
+                enabled = hasUnpinned,
+            )
         },
     ) {
         when (val s = state) {
@@ -61,10 +71,6 @@ fun RingScreen(
                 measurement = s.measurement,
                 autoHoldMs = viewModel.autoHoldSeconds() * 1000L,
                 onTogglePin = { capture -> if (capture.pinned) viewModel.unpin(capture.id) else viewModel.pin(capture.id) },
-                onInspect = { capture ->
-                    viewModel.selectCapture(capture.id)
-                    onOpenCaptures()
-                },
             )
         }
     }
@@ -75,7 +81,6 @@ private fun RingGridContent(
     measurement: RingMeasurement,
     autoHoldMs: Long,
     onTogglePin: (RingCapture) -> Unit,
-    onInspect: (RingCapture) -> Unit,
 ) {
     val snap = measurement.snapshot
     val palette = LocalStageScopePalette.current
@@ -106,7 +111,6 @@ private fun RingGridContent(
                 tileSize = tileSize,
                 rowSpacing = rowSpacing,
                 onTogglePin = onTogglePin,
-                onInspect = onInspect,
             )
             if (snap.allSlotsPinned) {
                 Text(

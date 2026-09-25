@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -23,6 +26,7 @@ fun RingDetailsScreen(viewModel: RingViewModel, orientationViewModel: Orientatio
     val isMeasuring = state is RingUiState.Measuring
     val orientationLocked by orientationViewModel.locked.collectAsStateWithLifecycle()
     val listState = rememberScalingLazyListState()
+    var clearAllArmed by remember { mutableStateOf(false) }
 
     ScalingLazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -40,9 +44,10 @@ fun RingDetailsScreen(viewModel: RingViewModel, orientationViewModel: Orientatio
         }
         item {
             Text(
-                "Holds up to 5 distinct captures at once. Pin as many as you like -- pinning one " +
-                    "never unpins another. The watch-face complication shows whichever confirmed ring " +
-                    "is currently strongest, independent of what you've selected or pinned here.",
+                "Holds up to 5 distinct captures at once. Tap a populated tile on the Ring page to pin " +
+                    "or unpin it directly -- pinning one never unpins another. The watch-face " +
+                    "complication shows whichever confirmed ring is currently strongest, independent of " +
+                    "what you've pinned here.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -55,6 +60,23 @@ fun RingDetailsScreen(viewModel: RingViewModel, orientationViewModel: Orientatio
             }
         }
         item { DetailButton(onClick = viewModel::clearUnpinned, modifier = Modifier.fillMaxWidth()) { Text("Clear unpinned") } }
+        item {
+            if (clearAllArmed) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                    DetailButton(onClick = { clearAllArmed = false }) { Text("Cancel") }
+                    DetailButton(
+                        onClick = {
+                            viewModel.clearAll()
+                            clearAllArmed = false
+                        },
+                    ) { Text("Confirm: clear all (incl. pins)") }
+                }
+            } else {
+                DetailButton(onClick = { clearAllArmed = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Clear all (also removes pinned)")
+                }
+            }
+        }
 
         item { Text("Auto-hold duration", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         item {
