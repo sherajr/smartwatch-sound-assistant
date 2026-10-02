@@ -218,6 +218,12 @@ class CalibrationViewModel(private val container: AppContainer, private val sess
                 abortSampling()
                 _availability.value = CaptureAvailability.Error(status.message)
             }
+            // The microphone is lent to the assistant: a half-finished reference window must not be
+            // finalized as if it were complete, exactly like any other dropout.
+            is CaptureStatus.Paused -> {
+                abortSampling()
+                _availability.value = CaptureAvailability.NotStarted
+            }
             CaptureStatus.Stopped -> {
                 abortSampling()
                 currentConfig = null

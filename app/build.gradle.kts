@@ -13,8 +13,8 @@ android {
         applicationId = "com.peaceantz.stagescope"
         minSdk = 30
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -96,7 +96,18 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
+    // AI assistant (phone-backed). The watch app stays fully usable without any of this: the
+    // instruments never touch the network, an account, or Google Play services.
+    implementation(project(":shared"))
+    implementation("com.google.android.gms:play-services-wearable:20.0.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
+    // Foreground check before measurement is resumed after a voice interaction.
+    implementation("androidx.lifecycle:lifecycle-process:2.10.0")
+    // "Continue on phone": opens the stored task on the paired phone (RemoteActivityHelper).
+    implementation("androidx.wear:wear-remote-interactions:1.2.0")
+
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

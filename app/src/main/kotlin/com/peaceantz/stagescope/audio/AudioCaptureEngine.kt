@@ -44,6 +44,9 @@ class AudioCaptureEngine(private val appContext: Context) : PcmSource {
 
     @Volatile private var stopRequested = false
 
+    /** The job most recently asked to stop, kept so [awaitStopped] can wait for its `finally` (release). */
+    @Volatile private var stoppingJob: Job? = null
+
     override fun start(scope: CoroutineScope, onBlock: (FloatArray) -> Unit) {
         if (job?.isActive == true) return
 
@@ -67,8 +70,14 @@ class AudioCaptureEngine(private val appContext: Context) : PcmSource {
                 // Already stopped/released on another path; nothing to do.
             }
         }
+        stoppingJob = job
         job?.cancel()
         job = null
+    }
+
+    override suspend fun awaitStopped() {
+        // Bounded: a stuck driver must never hang the voice flow; the caller proceeds either way.
+        kotlinx.coroutines.withTimeoutOrNull(1_500) { stoppingJob?.join() }
     }
 
     private suspend fun runCapture(onBlock: (FloatArray) -> Unit) {

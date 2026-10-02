@@ -1,5 +1,40 @@
 # Status
 
+## Optional AI assistant + phone companion (all additive; nothing here is committed yet)
+
+The watch gains a third page, **ASSISTANT** (after ANALYZER and RING), and the repo gains a phone companion and a shared module.
+The instruments are unchanged and still need no phone, network, key or Google account. Design and guarantees:
+[AI_ARCHITECTURE.md](AI_ARCHITECTURE.md); owner setup: [AI_SETUP.md](AI_SETUP.md); screenshots: `docs/screenshots/assistant/` (watch) and
+`docs/screenshots/phone/`. Work is on branch `feature/ai-assistant-phone-companion`, **uncommitted**.
+
+### What was built
+- **`:shared`** (pure Kotlin) — wire protocol v1, `MeasurementContext`, the conflict-safe issue log (version vectors, tombstones), the action state machine (confirmation bound to action id + revision + content hash + Google account), show/report/time logic, `PersistentState` (atomic writes, corrupt-file quarantine).
+- **`:phone`** (same package name and signing key as the watch app) — four real provider adapters (OpenAI, Gemini, xAI Grok, Anthropic Claude: streaming, tool lifecycle, cancellation, usage, errors; never a silent provider or model switch), Keystore-encrypted bring-your-own keys, a typed tool registry the model can only *propose* through, Gmail/Calendar actions behind UI confirmation (an ambiguous send is "outcome unknown" and never retried), Keep as an honest "Ready on phone" hand-off, show/contacts/issues/usage screens, voice transcription, "Continue on phone" deep links, WorkManager-backed durable requests.
+- **Watch** — the Assistant page and its sub-screens, `AudioCoordinator` (the assistant borrows the mic from measurement and gives it back), a pre-speech `MeasurementContext` snapshot (raw dBFS and Estimated SPL kept apart; pinned/restored rings never described as "ringing now"), a durable outbox with stale-question rules, offline voice memos and a local issue log, an optional second Tile ("Ask AI") that only ever opens the page.
+- **Tooling and docs** — `scripts\` build/test/lint/install for both apps with device-role checks and `check-signing.ps1`, VS Code tasks, README, `AI_SETUP.md`, `AI_ARCHITECTURE.md`, updated `CLAUDE.md`.
+
+### Verification (what was actually run)
+- **Unit tests: shared 106, phone 182, watch 241 — all pass** (the 113 original watch tests are untouched). **Lint: 0 errors** on both apps (warnings are dependency-version notices and style hints). Both debug APKs build; `check-signing.ps1` confirms they share one certificate (debug SHA-1 `0B:05:6D:E5:92:4C:52:10:95:5B:F8:A0:FC:BA:A9:B2:72:82:9F:66`).
+- **Emulators** (no accounts, no real keys, fixture data only): every watch Assistant screen was driven by touch on a round Wear OS 6 emulator; the Analyzer was confirmed to pause and resume around a question; the phone app was run end to end in its built-in test mode (a conversation through the real orchestrator and stores), with show/contact/issue forms, a dummy key encrypted by the real Android Keystore (masked, never in plaintext on disk or in logcat, removable), corrupt-file recovery, and deep links to a conversation and to a single card. Details: [AI_ARCHITECTURE.md §17](AI_ARCHITECTURE.md#17-what-is-and-isnt-verified).
+- **Defects that looking at the screens found, now fixed** (each has a note in `CLAUDE.md`): a cold-launch shortcut landing one page short ("Ask AI" opened Ring); a failure message from one screen reappearing on another; Confirm appearing to do nothing when the draft was scrolled; warnings placed after the text they warn about; voice memos and issues deleted by a single tap; long answers clipped by the bezel; a recording silently dropped to make room for a newer one; and on the phone, dialog errors hidden below the visible fields (an invalid time zone just ignored Save), a link that opened the right conversation but not the right card, and test-mode answers counting against the real daily request limit.
+
+### Not verified here — needs your hardware or accounts
+Live calls to any AI provider (the adapters are tested against fixtures written from the vendors' documented formats, last checked 2026-10-01); Google consent and real Gmail/Calendar; Wear Data Layer delivery and the voice channel between a **real paired** watch and phone (the two emulators are not paired); on-device speech recognition and text-to-speech (the emulator has neither); notifications; Keep/Gemini; the Ask Tile's rendering; and the layout on a physical round watch.
+
+### Things you should know
+- **A documentation mismatch was corrected, not a behaviour change.** README and `MEASUREMENTS.md` said backgrounding the app "stops capture" and shows "Paused"; the code never did that (only the 2-minute keep-awake countdown stops a session, and Android may silence the mic once the app is off screen). The docs now say what the code does. "Paused" now exists, but only for the assistant borrowing the mic.
+- `scripts\install-launch.ps1` had a bug when exactly one device was attached (it indexed a one-item result as an array); fixed while adding the role checks.
+- **One watch listed twice by adb.** On the owner's real setup `adb devices` showed the Pixel Watch 5 both as `192.0.2.10:40000` (an example address) and as an mDNS `adb-<serial>-xxxxxx._adb-tls-connect._tcp` entry, and the install script refused with "More than one watch is connected". Entries are now merged by hardware serial (`ro.serialno`) so that is one watch (the `ip:port` entry is used; a cable would beat both), while two different watches — or two emulators — are still refused. Covered by `scripts\test-device-selection.ps1`, which reproduces the exact error without the fix.
+- Speech: only the **on-device** recognizer is used on the watch (Wear OS 4+ in practice); without it the watch records up to 30 s and the phone transcribes it (cloud transcription is opt-in and shows its cost). Theatre mode (silent) is the default; text-to-speech is on demand and asks first with no headphones connected; haptics are off.
+- Model names and prices come from a catalogue dated 2026-10-01 and are shown with that date. Each provider bills *your* account; the app's limits only limit what the app sends.
+
+### What you still need to do (in order)
+1. Install both apps (`scripts\build.ps1`, `scripts\install-phone.ps1`, `scripts\install-launch.ps1`) and run `scripts\check-signing.ps1` — the two must be signed with the same key or the watch and phone will never connect.
+2. Open the phone app → Settings → AI providers, paste a key for at least one provider (OpenAI, Gemini, xAI or Anthropic) and use *Check key*.
+3. Optional, for real email/calendar: create a Google Cloud project, enable the Gmail and Calendar APIs, create an **Android** OAuth client for package `com.peaceantz.stagescope` with the SHA-1 above, add yourself as a test user, then connect in Settings → Gmail & Calendar ([AI_SETUP.md §5](AI_SETUP.md#5-gmail-and-calendar-optional)). Until then drafts open in your email/calendar app instead.
+4. Work through the manual checklist in [AI_SETUP.md §11](AI_SETUP.md#11-manual-verification-checklist-for-you) on the real watch and phone, including the round-screen checks.
+5. Nothing has been committed. Review `git status`, then commit when you're happy.
+
 ## Simplified Ring interactions + fixed Calibration overlap
 
 Four changes: "Clear unpinned" is now a second button right on the Ring page next to Start/Stop;

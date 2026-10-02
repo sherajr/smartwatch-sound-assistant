@@ -1,40 +1,16 @@
-# Installs the debug APK on a specific device/emulator and launches it.
+# Installs the WATCH app on a connected Wear OS watch and launches it.
 # Usage: scripts\install-launch.ps1 [-Serial <adb-serial>]
+# It refuses to install on anything that isn't a watch (the phone app has its own script: install-phone.ps1).
 param(
     [string]$Serial = ""
 )
 . "$PSScriptRoot\common.ps1"
 
-$adb = Get-StageScopeAdbPath
-$projectRoot = Split-Path -Parent $PSScriptRoot
-$apk = Join-Path $projectRoot "app\build\outputs\apk\debug\app-debug.apk"
-
-if (-not (Test-Path $apk)) {
-    Write-Output "No APK found, building first..."
-    Invoke-StageScopeGradle assembleDebug
+if (-not (Test-Path $script:WatchApk)) {
+    Write-Output "No watch APK found, building first..."
+    Invoke-StageScopeGradle ":app:assembleDebug"
 }
 
-$deviceLines = & $adb devices | Select-Object -Skip 1 | Where-Object { $_.Trim() -ne "" -and $_ -notmatch "^\* " }
-$deviceSerials = $deviceLines | ForEach-Object { ($_ -split "\s+")[0] }
-
-if ($deviceSerials.Count -eq 0) {
-    throw "No adb devices found. Connect the watch (USB or wireless debugging) and retry, or run scripts\pair-wireless.ps1."
-}
-
-if (-not $Serial) {
-    if ($deviceSerials.Count -gt 1) {
-        Write-Output "Multiple devices found; specify one with -Serial:"
-        $deviceSerials | ForEach-Object { Write-Output "  $_" }
-        throw "Ambiguous target device."
-    }
-    $Serial = $deviceSerials[0]
-}
-
-Write-Output "Target device: $Serial"
-& $adb -s $Serial install -r $apk
-if ($LASTEXITCODE -ne 0) { throw "adb install failed" }
-
-& $adb -s $Serial shell am start -n "com.peaceantz.stagescope/.MainActivity"
-if ($LASTEXITCODE -ne 0) { throw "Failed to launch MainActivity" }
-
-Write-Output "Installed and launched on $Serial."
+$device = Select-StageScopeDevice -Role watch -Serial $Serial
+Write-Output "Target watch: $($device.Serial) ($($device.Model))"
+Install-StageScopeApk -Serial $device.Serial -Apk $script:WatchApk -Activity $script:WatchActivity -Label "watch"

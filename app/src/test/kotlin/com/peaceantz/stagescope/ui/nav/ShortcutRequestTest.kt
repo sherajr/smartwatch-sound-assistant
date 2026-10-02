@@ -42,6 +42,28 @@ class ShortcutRequestTest {
     }
 
     @Test
+    fun `the Ask AI shortcut opens the Assistant page and can never start a measurement or a microphone`() {
+        val request = ShortcutRequest.forShortcut(SHORTCUT_ASK_AI, ringCaptureId = null, requestId = 1L)
+        assertEquals(ModePage.ASSISTANT, request!!.page)
+        assertEquals("opening the page is all it does", false, request.startMeasure)
+        assertNull(request.ringCaptureId)
+    }
+
+    @Test
+    fun `the pager order is Analyzer then Ring then Assistant`() {
+        assertEquals(listOf(0, 1, 2), listOf(ModePage.ANALYZER, ModePage.RING, ModePage.ASSISTANT))
+        assertEquals(3, ModePage.COUNT)
+    }
+
+    @Test
+    fun `no existing shortcut string changed meaning`() {
+        assertEquals("measure", SHORTCUT_MEASURE)
+        assertEquals("level", SHORTCUT_OPEN_LEVEL)
+        assertEquals("spectrum", SHORTCUT_OPEN_SPECTRUM)
+        assertEquals("ring", SHORTCUT_OPEN_RING)
+    }
+
+    @Test
     fun `unknown shortcut string produces no navigation request`() {
         assertNull(ShortcutRequest.forShortcut("not-a-real-shortcut", ringCaptureId = null, requestId = 1L))
         assertNull(ShortcutRequest.forShortcut(null, ringCaptureId = null, requestId = 1L))

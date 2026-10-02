@@ -13,23 +13,63 @@
             "label": "StageScope: Build Debug APK",
             "type": "shell",
             "command": "powershell.exe",
-            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/build.ps1"],
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/build.ps1", "-Target", "watch"],
             "problemMatcher": ["$gradle"],
             "group": { "kind": "build", "isDefault": true }
+        },
+        {
+            "label": "StageScope: Build Phone APK",
+            "type": "shell",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/build.ps1", "-Target", "phone"],
+            "problemMatcher": ["$gradle"],
+            "group": "build"
+        },
+        {
+            "label": "StageScope: Build Both APKs",
+            "type": "shell",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/build.ps1", "-Target", "all"],
+            "problemMatcher": ["$gradle"],
+            "group": "build"
         },
         {
             "label": "StageScope: Run Unit Tests",
             "type": "shell",
             "command": "powershell.exe",
-            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/test.ps1"],
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/test.ps1", "-Module", "all"],
             "problemMatcher": ["$gradle"],
             "group": { "kind": "test", "isDefault": true }
+        },
+        {
+            "label": "StageScope: Run Watch Tests",
+            "type": "shell",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/test.ps1", "-Module", "watch"],
+            "problemMatcher": ["$gradle"],
+            "group": "test"
+        },
+        {
+            "label": "StageScope: Run Phone + Shared Tests",
+            "type": "shell",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "& '${workspaceFolder}/scripts/test.ps1' -Module shared; & '${workspaceFolder}/scripts/test.ps1' -Module phone"],
+            "problemMatcher": ["$gradle"],
+            "group": "test"
+        },
+        {
+            "label": "StageScope: Lint (watch + phone)",
+            "type": "shell",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/lint.ps1", "-Module", "all"],
+            "problemMatcher": ["$gradle"],
+            "group": "none"
         },
         {
             "label": "StageScope: Lint",
             "type": "shell",
             "command": "powershell.exe",
-            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/lint.ps1"],
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/lint.ps1", "-Module", "watch"],
             "problemMatcher": ["$gradle"],
             "group": "none"
         },
@@ -43,10 +83,46 @@
             "group": "none"
         },
         {
+            "label": "StageScope: Install Phone App",
+            "type": "shell",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/install-phone.ps1"],
+            "dependsOn": ["StageScope: Build Phone APK"],
+            "problemMatcher": [],
+            "group": "none"
+        },
+        {
+            "label": "StageScope: Check Signing (watch = phone)",
+            "type": "shell",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/check-signing.ps1"],
+            "dependsOn": ["StageScope: Build Both APKs"],
+            "problemMatcher": [],
+            "group": "none"
+        },
+        {
             "label": "StageScope: Logs",
             "type": "shell",
             "command": "powershell.exe",
             "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/logs.ps1"],
+            "isBackground": true,
+            "problemMatcher": [],
+            "group": "none"
+        },
+        {
+            "label": "StageScope: Watch Logs",
+            "type": "shell",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/logs.ps1", "-Role", "watch"],
+            "isBackground": true,
+            "problemMatcher": [],
+            "group": "none"
+        },
+        {
+            "label": "StageScope: Phone Logs",
+            "type": "shell",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/logs.ps1", "-Role", "phone"],
             "isBackground": true,
             "problemMatcher": [],
             "group": "none"

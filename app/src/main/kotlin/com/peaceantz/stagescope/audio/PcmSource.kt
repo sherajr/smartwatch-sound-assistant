@@ -16,4 +16,10 @@ interface PcmSource {
 
     /** Stops and releases any underlying resources. Safe to call when not running. */
     fun stop()
+
+    /**
+     * Suspends until a previous [stop] has actually released the underlying device. Needed before
+     * handing the microphone to something else (speech recognition): [stop] only *requests* the stop.
+     */
+    suspend fun awaitStopped() {}
 }
