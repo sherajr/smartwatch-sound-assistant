@@ -49,7 +49,6 @@ class WatchMessageService : WearableListenerService() {
             runBlocking(Dispatchers.IO) {
                 withTimeoutOrNull(8_000) {
                     container.assistant.flushOutbox()
-                    container.assistant.uploadPendingMemos()
                     if (info.nodes.isNotEmpty()) container.issues.publishAll()
                 }
             }

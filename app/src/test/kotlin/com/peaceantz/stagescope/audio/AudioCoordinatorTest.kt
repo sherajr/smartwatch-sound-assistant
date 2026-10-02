@@ -1,5 +1,6 @@
 package com.peaceantz.stagescope.audio
 
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -208,6 +209,75 @@ class AudioCoordinatorTest {
         assertEquals(AudioMode.PHONE_PLAYBACK, coordinator.mode.value)
         coordinator.release(phone)
         assertEquals(AudioMode.IDLE, coordinator.mode.value)
+    }
+
+    // ------------------------------------------------------------- a screen another process runs (dictation)
+
+    @Test
+    fun `a lease given up with allowResume false ends the paused session - the microphone may still be in use`() = runBlocking {
+        val lease = coordinator.acquire(AudioLeaseKind.LISTENING)
+        coordinator.release(lease, allowResume = false)
+        assertFalse("never reopened", control.events.contains("resume"))
+        assertTrue(control.events.contains("end"))
+        assertFalse(control.paused)
+        assertEquals(AudioMode.IDLE, coordinator.mode.value)
+    }
+
+    @Test
+    fun `the veto waits for the last lease, and then ends the session once`() = runBlocking {
+        val listening = coordinator.acquire(AudioLeaseKind.LISTENING)
+        val phone = coordinator.acquire(AudioLeaseKind.PHONE_PLAYBACK, ttlMs = 30_000)
+        coordinator.release(listening, allowResume = false)
+        assertTrue("the phone is still speaking, so nothing is decided yet", control.paused)
+        coordinator.release(phone)
+        assertFalse(control.events.contains("resume"))
+        assertEquals(1, control.events.count { it == "end" })
+    }
+
+    @Test
+    fun `a veto with nothing paused does not poison a later, ordinary cycle`() = runBlocking {
+        control.running = false
+        val first = coordinator.acquire(AudioLeaseKind.LISTENING)
+        coordinator.release(first, allowResume = false) // nothing was paused, so there is nothing to veto
+        control.running = true
+        val second = coordinator.acquire(AudioLeaseKind.LISTENING)
+        coordinator.release(second)
+        assertTrue("an ordinary release still resumes", control.events.contains("resume"))
+    }
+
+    @Test
+    fun `a lease with no time limit never resumes measurement on its own, however long the screen stays open`() = runBlocking {
+        val lease = coordinator.acquire(AudioLeaseKind.LISTENING, ttlMs = null)
+        repeat(100) { now += 60_000; coordinator.tick() }
+        assertTrue(control.paused)
+        assertTrue(coordinator.isHeld(AudioLeaseKind.LISTENING))
+        coordinator.release(lease)
+        assertFalse(coordinator.isHeld(AudioLeaseKind.LISTENING))
+    }
+
+    @Test
+    fun `isHeld reports a kind only while it is held`() = runBlocking {
+        assertFalse(coordinator.isHeld(AudioLeaseKind.PHONE_PLAYBACK))
+        val lease = coordinator.acquire(AudioLeaseKind.PHONE_PLAYBACK, ttlMs = 30_000)
+        assertTrue(coordinator.isHeld(AudioLeaseKind.PHONE_PLAYBACK))
+        assertFalse(coordinator.isHeld(AudioLeaseKind.LISTENING))
+        now += 31_000
+        assertFalse("an expired lease is not held", coordinator.isHeld(AudioLeaseKind.PHONE_PLAYBACK))
+        coordinator.release(lease)
+    }
+
+    @Test
+    fun `a caller cancelled while the microphone is being freed gives its lease back - a lease with no timer cannot be stranded`() = runBlocking {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val fake = FakeMeasurementControl().also { it.micGate = gate }
+        val c = AudioCoordinator({ now }, { foreground }, { micPermission }).also { it.attach(fake) }
+        val job = launch(kotlinx.coroutines.Dispatchers.Unconfined) { c.acquire(AudioLeaseKind.LISTENING) }
+        assertTrue("paused and waiting for the microphone", fake.paused && c.isHeld(AudioLeaseKind.LISTENING))
+        job.cancel()
+        job.join()
+        assertFalse("the lease did not outlive its caller", c.isHeld(AudioLeaseKind.LISTENING))
+        assertFalse("and measurement was not left paused", fake.paused)
+        assertEquals(1, fake.count("resume"))
     }
 
     @Test

@@ -42,14 +42,14 @@ Two apps share one package name and signing key: the **watch app** (this project
 **What it can do**
 
 - Answer questions about the sound — grounded in a **measurement snapshot taken the instant you ask** (raw dBFS and calibrated *Estimated SPL* kept separate; rings you pinned earlier are described as history, not as "ringing now"). Answers are structured *observed / plausible explanations / next check / how to re-measure*, and never claim to know it's feedback or tell you to cut a frequency on a console.
-- Log show issues by voice — **works with no phone, network or AI** — synced watch ⇄ phone without losing edits made on either.
+- Log show issues by dictating or typing on the watch — **logging works with no phone, network or AI** (dictation itself uses the watch's own speech service, which may need a connection) — synced watch ⇄ phone without losing edits made on either.
 - Draft a **performance report** or **issue email** from the selected performance's logged facts, and a **calendar event** — as *drafts you review in full and confirm*. Nothing is sent or created until you confirm; a confirmation is tied to the exact text, recipients and Google account you saw.
 - Prepare a **Keep item** — honestly as *"Ready on phone"* (Google gives apps no way to add to an existing Keep list), never as "added".
 - **Continue on phone**: open the exact saved draft or conversation on the phone.
 
 **Providers** — your own account with any of **OpenAI (ChatGPT API)**, **Google Gemini**, **xAI Grok** or **Anthropic Claude**; the model in use is always shown and is never silently swapped.
 
-**Quiet by default** — theatre mode (silent) is on; replies are text, spoken only when you tap Speak; haptics are off. The microphone is used only while you are asking, for one bounded utterance you review before sending, and measurement is paused for that moment and resumed after (only if it was running, the app is on screen, permission is still granted and the 2-minute keep-awake countdown allows it). A Tile, complication or notification can open the Assistant page but can never start a microphone.
+**Quiet by default** — theatre mode (silent) is on; replies are text, spoken only when you tap Speak; haptics are off. Asking opens the watch's own dictation screen (StageScope never records you or sends audio to the phone); you check the words before anything is sent. Measurement is paused while that screen is open and resumed after (only if it was running, the app is on screen, permission is still granted and the 2-minute keep-awake countdown allows it). A Tile, complication or notification can open the Assistant page but can never start a dictation.
 
 **Costs and limits** — each provider bills *your* API account. The phone shows estimated and (where the API reports it) actual cost and lets you set local request/budget limits; these limit what the app sends, they are not a provider billing cap.
 

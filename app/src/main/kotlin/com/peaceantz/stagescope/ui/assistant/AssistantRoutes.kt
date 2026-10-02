@@ -6,7 +6,7 @@ import com.peaceantz.stagescope.shared.measurement.SnapshotOrigin
 
 /** Route patterns and builders for everything reached from the Assistant page. Ids are encoded; nothing else travels in a route. */
 object AssistantRoutes {
-    const val LISTEN = "assistantListen/{task}/{origin}?memo={memo}&conv={conv}&edit={edit}"
+    const val LISTEN = "assistantListen/{task}/{origin}?memo={memo}&conv={conv}&edit={edit}&draft={draft}"
     const val REPLY = "assistantReply/{conversationId}"
     const val ACTION = "assistantAction/{conversationId}/{actionId}"
     const val TASKS = "assistantTasks"
@@ -22,14 +22,15 @@ object AssistantRoutes {
     const val ARG_MEMO = "memo"
     const val ARG_CONV = "conv"
     const val ARG_EDIT = "edit"
+    const val ARG_DRAFT = "draft"
     const val ARG_CONVERSATION_ID = "conversationId"
     const val ARG_ACTION_ID = "actionId"
     const val ARG_ISSUE_ID = "issueId"
 
-    fun listen(task: TaskKind, origin: SnapshotOrigin, memo: String? = null, conv: String? = null, edit: String? = null): String =
+    fun listen(task: TaskKind, origin: SnapshotOrigin, memo: String? = null, conv: String? = null, edit: String? = null, draft: Boolean = false): String =
         "assistantListen/${task.name}/${origin.name}" + buildString {
             val q = listOfNotNull(
-                memo?.let { "memo=${Uri.encode(it)}" }, conv?.let { "conv=${Uri.encode(it)}" }, edit?.let { "edit=${Uri.encode(it)}" },
+                memo?.let { "memo=${Uri.encode(it)}" }, conv?.let { "conv=${Uri.encode(it)}" }, edit?.let { "edit=${Uri.encode(it)}" }, if (draft) "draft=1" else null,
             )
             if (q.isNotEmpty()) append('?').append(q.joinToString("&"))
         }
@@ -52,5 +53,6 @@ class AssistantNavigator(
     val shows: () -> Unit,
     val memos: () -> Unit,
     val reviewMemo: (memoId: String) -> Unit,
+    val resumeDraft: () -> Unit,
     val close: () -> Unit,
 )

@@ -27,7 +27,6 @@ import com.peaceantz.stagescope.shared.protocol.StatusReply
 import com.peaceantz.stagescope.shared.protocol.SyncNudge
 import com.peaceantz.stagescope.shared.protocol.ThreadView
 import com.peaceantz.stagescope.shared.protocol.TranscriptResult
-import com.peaceantz.stagescope.shared.protocol.VoiceOffer
 import com.peaceantz.stagescope.shared.protocol.Wire
 import com.peaceantz.stagescope.shared.protocol.WireCodec
 import com.peaceantz.stagescope.shared.protocol.WireMessage
@@ -50,8 +49,8 @@ interface PhoneLink {
     /** Hands [message] to every reachable phone; returns how many. A positive number is NOT proof it was processed. */
     suspend fun send(message: WireMessage): Int
 
-    /** Streams a recording to the phone over a channel. */
-    suspend fun sendVoice(memoId: String, file: File, nodeId: String): Boolean
+    // There is deliberately no way to stream a recording to the phone: StageScope no longer transcribes audio on the phone, and a
+    // link that cannot send audio makes "no recording ever leaves this watch through StageScope" a fact of the type, not a habit.
 
     /** Every StageScope data item currently held by the Data Layer: (path, bytes). For a cold start. */
     suspend fun currentDataItems(): List<Pair<String, ByteArray>>
@@ -66,8 +65,8 @@ sealed interface ContinueUi {
 
 /**
  * The watch's durable assistant brain. It owns the outbox (every question the person asked, with where
- * it is on its way to the phone and back), the cached views the phone published, preferences and voice
- * memos. Nothing here touches a microphone or a speaker.
+ * it is on its way to the phone and back), the cached views the phone published, preferences and the
+ * older voice recordings an earlier version made. Nothing here touches a microphone or a speaker, and nothing here sends audio.
  *
  * Delivery follows [OutboxPolicy]: persist first, send, treat the phone's acknowledgement (not the
  * transport's "sent") as the confirmation, resend the same id if unacknowledged, never auto-send a stale
@@ -131,7 +130,7 @@ class AssistantRepository(
         link.send(
             Hello(
                 installId = installId, role = DeviceRole.WATCH, appVersionName = appVersionName, appVersionCode = appVersionCode,
-                features = setOf("assistant", "issues", "voice"), timezoneId = ZoneId.systemDefault().id,
+                features = setOf("assistant", "issues", "text-input"), timezoneId = ZoneId.systemDefault().id,
             ),
         )
     }
@@ -358,28 +357,30 @@ class AssistantRepository(
 
     // ---------------------------------------------------------------------------------- memos
 
-    suspend fun saveMemo(memo: VoiceMemo, pcm: ByteArray) {
-        File(memoDir, "${memo.memoId}.pcm").writeBytes(pcm)
-        memoStore.update { f -> MemoFile(makeRoomForMemo(f.memos + memo)) }
-        pruneMemoFiles()
-    }
-
-    /** A memo the person has no further use for: already sent, or failed (and shown to them as failed). */
-    private fun VoiceMemo.isFinished() = state == MemoState.SENT || state == MemoState.FAILED
+    // Older versions recorded short clips and had the phone turn them into text. Nothing records or uploads now; what is left from
+    // those versions is kept exactly as it was, for the person to read or delete -- never uploaded, never auto-sent.
 
     /**
-     * Keeps the bank at [MAX_MEMOS] by dropping only finished memos, oldest first. A recording still waiting for the phone, or a
-     * transcript nobody has checked yet, is never silently discarded -- if there is no finished memo to drop the list simply stays
-     * one over, and [canKeepAnotherMemo] stops the *next* recording from starting.
+     * One-time, idempotent: a recording that was waiting for (or being turned into text by) the phone becomes an older recording that
+     * simply stays on the watch. Transcripts already made are untouched (they can still be reviewed as text), and nothing is deleted:
+     * the audio file, the pre-recording measurement snapshot and the memo itself all survive until the person deletes it.
      */
-    private fun makeRoomForMemo(all: List<VoiceMemo>): List<VoiceMemo> {
-        var kept = all
-        while (kept.size > MAX_MEMOS) kept = kept - (kept.firstOrNull { it.isFinished() } ?: break)
-        return kept
+    suspend fun migrateLegacyMemos() {
+        memoStore.update { f ->
+            MemoFile(
+                f.memos.map { m ->
+                    when {
+                        m.state == MemoState.PENDING_PHONE || m.state == MemoState.UPLOADING || m.state == MemoState.TRANSCRIBING ->
+                            m.copy(state = MemoState.LEGACY_RECORDING, error = null)
+                        // A recording that "couldn't be sent" is still a recording the person made.
+                        m.state == MemoState.FAILED && m.transcript == null && File(memoDir, "${m.memoId}.pcm").exists() ->
+                            m.copy(state = MemoState.LEGACY_RECORDING, error = null)
+                        else -> m
+                    }
+                },
+            )
+        }
     }
-
-    /** False when every slot holds something the person still needs (a waiting recording or a transcript to check). */
-    fun canKeepAnotherMemo(): Boolean = memoStore.value.memos.let { it.size < MAX_MEMOS || it.any { m -> m.isFinished() } }
 
     suspend fun updateMemo(memoId: String, change: (VoiceMemo) -> VoiceMemo) {
         memoStore.update { f -> MemoFile(f.memos.map { if (it.memoId == memoId) change(it) else it }) }
@@ -390,36 +391,20 @@ class AssistantRepository(
         runCatching { File(memoDir, "$memoId.pcm").delete() }
     }
 
-    /** Uploads recordings that were waiting for the phone: offered first, then streamed. The audio is deleted once transcribed. */
-    suspend fun uploadPendingMemos() {
-        val node = link.reachablePhones().firstOrNull() ?: return
-        val due = memoStore.value.memos.filter { it.state == MemoState.PENDING_PHONE || (it.state == MemoState.UPLOADING && it.attempts < MAX_MEMO_ATTEMPTS) }
-        for (memo in due) {
-            val file = File(memoDir, "${memo.memoId}.pcm")
-            if (!file.exists()) {
-                updateMemo(memo.memoId) { it.copy(state = MemoState.FAILED, error = "The recording is gone.") }
-                continue
-            }
-            updateMemo(memo.memoId) { it.copy(state = MemoState.UPLOADING, attempts = it.attempts + 1) }
-            val offered = link.send(VoiceOffer(memo.requestId, memo.memoId, memo.purpose, memo.sampleRateHz, memo.durationMs, memo.byteCount)) > 0
-            val ok = offered && link.sendVoice(memo.memoId, file, node.id)
-            updateMemo(memo.memoId) {
-                when {
-                    ok -> it.copy(state = MemoState.TRANSCRIBING)
-                    it.attempts >= MAX_MEMO_ATTEMPTS -> it.copy(state = MemoState.FAILED, error = "The recording couldn't be sent to your phone.")
-                    else -> it.copy(state = MemoState.PENDING_PHONE)
-                }
-            }
-        }
-    }
-
+    /**
+     * A transcript from an earlier version's phone transcription that was still on its way when this version took over. It only ever
+     * makes words available for the person to review -- it never sends anything -- and an error never disturbs a recording that is
+     * still on the watch.
+     */
     private suspend fun onTranscript(t: TranscriptResult) {
         val memo = memoStore.value.memos.firstOrNull { it.memoId == t.memoId } ?: return
-        if (t.text != null) {
-            updateMemo(memo.memoId) { it.copy(state = MemoState.TRANSCRIPT_READY, transcript = t.text, engine = t.engine, error = null) }
-            // The audio has done its job; a transcript the person will review replaces it.
+        if (memo.state == MemoState.TRANSCRIPT_READY || memo.state == MemoState.SENT) return
+        val text = t.text?.trim().orEmpty()
+        if (text.isNotEmpty()) {
+            updateMemo(memo.memoId) { it.copy(state = MemoState.TRANSCRIPT_READY, transcript = text, engine = t.engine, error = null) }
+            // The words are what the person will review, and they are what is kept; the old clip is not needed any more.
             runCatching { File(memoDir, "${memo.memoId}.pcm").delete() }
-        } else {
+        } else if (!File(memoDir, "${memo.memoId}.pcm").exists()) {
             updateMemo(memo.memoId) { it.copy(state = MemoState.FAILED, error = t.error ?: "The phone couldn't transcribe that.") }
         }
     }
@@ -484,16 +469,9 @@ class AssistantRepository(
         return OutboxFile(f.entries.filterNot { it.requestId in drop })
     }
 
-    private fun pruneMemoFiles() {
-        val keep = memoStore.value.memos.map { "${it.memoId}.pcm" }.toSet()
-        memoDir.listFiles()?.filter { it.name !in keep }?.forEach { runCatching { it.delete() } }
-    }
-
     companion object {
         private const val TOO_LARGE = -1
         const val MAX_OUTBOX = 20
         const val MAX_THREADS = 8
-        const val MAX_MEMOS = 5
-        const val MAX_MEMO_ATTEMPTS = 3
     }
 }

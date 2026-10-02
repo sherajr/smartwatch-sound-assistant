@@ -46,6 +46,8 @@ class SpeechOutput(
     fun speak(text: String): SpeakStart {
         val clean = text.trim().take(MAX_CHARS)
         if (clean.isEmpty()) return SpeakStart.Unavailable("There is nothing to say.")
+        // While the watch's dictation screen is open the microphone is the person's: speaking now would be dictated back into it.
+        if (coordinator.isHeld(AudioLeaseKind.LISTENING)) return SpeakStart.Unavailable("Dictation is open. Try again when it's done.")
         val id = UUID.randomUUID().toString()
         val engine = tts
         if (engine == null) {

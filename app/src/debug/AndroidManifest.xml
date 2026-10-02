@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+        Debug builds only (never release): two inert fixtures for DictationLauncherBindingTest. Activities must live in the app's own
+        process to be driven by an instrumentation test, so they cannot be declared in the test APK. They are not exported, have no
+        launcher entry and draw nothing; nothing in the app can reach them.
+    -->
+    <application>
+        <activity
+            android:name="com.peaceantz.stagescope.assistant.speech.DictationHostActivity"
+            android:exported="false" />
+        <activity
+            android:name="com.peaceantz.stagescope.assistant.speech.FakeRecognizerActivity"
+            android:exported="false" />
+    </application>
+</manifest>

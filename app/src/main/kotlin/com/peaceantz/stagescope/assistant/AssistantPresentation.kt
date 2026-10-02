@@ -1,5 +1,6 @@
 package com.peaceantz.stagescope.assistant
 
+import com.peaceantz.stagescope.assistant.speech.DictationDraft
 import com.peaceantz.stagescope.audio.AudioMode
 import com.peaceantz.stagescope.shared.actions.ActionCard
 import com.peaceantz.stagescope.shared.actions.ActionState
@@ -26,6 +27,11 @@ sealed interface AttentionItem {
     data class Memo(val memo: VoiceMemo) : AttentionItem {
         override val key get() = "memo:${memo.memoId}"
     }
+
+    /** Words dictated (or typed) and not yet sent: the one unsent draft that survives closing the app. */
+    data class Draft(val draft: DictationDraft) : AttentionItem {
+        override val key get() = "draft:${draft.request.sessionId}"
+    }
 }
 
 /** Decides what belongs on the "needs you" list. Pure, so it is unit-tested. */
@@ -35,9 +41,12 @@ object AssistantAttention {
         ActionState.OUTCOME_UNCERTAIN, ActionState.FAILED,
     )
 
-    fun build(threads: List<ThreadView>, outbox: List<OutboxEntry>, memos: List<VoiceMemo>): List<AttentionItem> = buildList {
+    fun build(threads: List<ThreadView>, outbox: List<OutboxEntry>, memos: List<VoiceMemo>, draft: DictationDraft? = null): List<AttentionItem> = buildList {
+        // Words nobody has sent come first: they exist nowhere else.
+        if (draft != null) add(AttentionItem.Draft(draft))
         for (t in threads) for (card in t.actions) if (card.state in ACTION_STATES) add(AttentionItem.Action(t.conversationId, t.title, card))
         for (e in outbox) if (e.state == OutboxState.STALE || e.state == OutboxState.FAILED) add(AttentionItem.Question(e))
+        // An older recording that is still just a recording needs nothing from the person (it only waits to be deleted); a transcript does.
         for (m in memos) if (m.state == MemoState.TRANSCRIPT_READY || m.state == MemoState.FAILED) add(AttentionItem.Memo(m))
     }
 }
@@ -55,7 +64,7 @@ object AssistantFormatting {
      */
     fun pageStatus(reachable: Boolean, providers: ProvidersView?, mode: AudioMode, working: OutboxEntry?): PageStatus {
         when (mode) {
-            AudioMode.LISTENING -> return PageStatus("Listening…", StatusSeverity.OK)
+            AudioMode.LISTENING -> return PageStatus("Dictation open… measurement paused", StatusSeverity.NOTE)
             AudioMode.SPEAKING -> return PageStatus("Speaking… measurement paused", StatusSeverity.NOTE)
             AudioMode.PHONE_PLAYBACK -> return PageStatus("Phone is speaking… measurement paused", StatusSeverity.NOTE)
             AudioMode.IDLE -> Unit

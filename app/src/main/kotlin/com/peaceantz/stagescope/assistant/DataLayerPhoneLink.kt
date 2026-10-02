@@ -12,10 +12,7 @@ import com.peaceantz.stagescope.shared.protocol.Wire
 import com.peaceantz.stagescope.shared.protocol.WireCodec
 import com.peaceantz.stagescope.shared.protocol.WireMessage
 import com.peaceantz.stagescope.shared.util.StageScopeJson
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
-import kotlinx.coroutines.withContext
-import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 
 /** Where the watch publishes its own copy of an issue so the phone's replica can merge it. */
@@ -49,19 +46,6 @@ class DataLayerPhoneLink(
             runCatching { Wearable.getMessageClient(context).sendMessage(p.id, Wire.MSG, bytes).await() }.onSuccess { delivered++ }
         }
         return delivered
-    }
-
-    override suspend fun sendVoice(memoId: String, file: File, nodeId: String): Boolean = withContext(Dispatchers.IO) {
-        val client = Wearable.getChannelClient(context)
-        val channel = runCatching { client.openChannel(nodeId, "${Wire.CHANNEL_VOICE}/$memoId").await() }.getOrNull() ?: return@withContext false
-        try {
-            client.getOutputStream(channel).await().use { out -> file.inputStream().use { it.copyTo(out) } }
-            true
-        } catch (e: Exception) {
-            false
-        } finally {
-            runCatching { client.close(channel).await() }
-        }
     }
 
     override suspend fun currentDataItems(): List<Pair<String, ByteArray>> = runCatching {

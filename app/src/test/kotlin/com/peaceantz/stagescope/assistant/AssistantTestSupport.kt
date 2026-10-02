@@ -9,14 +9,11 @@ import com.peaceantz.stagescope.shared.protocol.Envelope
 import com.peaceantz.stagescope.shared.protocol.WireCodec
 import com.peaceantz.stagescope.shared.protocol.WireMessage
 import com.peaceantz.stagescope.shared.util.StageScopeJson
-import java.io.File
 
 /** Records everything the watch would hand to the Data Layer; can simulate "nobody there" and "too big". */
 class FakePhoneLink : PhoneLink {
     var phones: List<PhoneNode> = listOf(PhoneNode("phone-1", "Pixel 10", nearby = true))
     val sent = mutableListOf<WireMessage>()
-    val voice = mutableListOf<Triple<String, File, String>>()
-    var voiceOk = true
 
     /** Messages over this many bytes are refused like the real codec would (the Data Layer's own cap is 60 KB). */
     var maxBytes: Int = Int.MAX_VALUE
@@ -30,12 +27,6 @@ class FakePhoneLink : PhoneLink {
         if (phones.isEmpty()) return 0
         sent += message
         return phones.size
-    }
-
-    override suspend fun sendVoice(memoId: String, file: File, nodeId: String): Boolean {
-        if (phones.isEmpty() || !voiceOk) return false
-        voice += Triple(memoId, file, nodeId)
-        return true
     }
 
     override suspend fun currentDataItems() = dataItems

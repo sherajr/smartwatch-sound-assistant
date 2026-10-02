@@ -15,6 +15,7 @@ import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
 import com.peaceantz.stagescope.assistant.AssistantFormatting
+import com.peaceantz.stagescope.assistant.speech.DictationPresentation
 import com.peaceantz.stagescope.shared.assistant.ReplyMode
 import com.peaceantz.stagescope.ui.components.RotatedContent
 
@@ -75,13 +76,9 @@ fun AssistantSettingsScreen(vm: AssistantViewModel, angleDegrees: Float, nav: As
                     onClick = { vm.setHaptics(!prefs.hapticsEnabled) },
                 )
             }
-            item {
-                ChipButton(
-                    "Listen up to ${prefs.listenSeconds} s", secondary = "Tap to change (10 / 20 / 30)",
-                    onClick = { vm.setListenSeconds(when { prefs.listenSeconds < 20 -> 20; prefs.listenSeconds < 30 -> 30; else -> 10 }) },
-                )
-            }
-            item { Hint("The microphone is used only while you're asking, and measurement is paused for that moment and resumed after.") }
+            item { SectionLabel("Voice input") }
+            item { Hint(DictationPresentation.NETWORK_NOTE) }
+            item { Hint("Dictation is the watch's own screen: it decides when to stop listening. StageScope never records you, and measurement pauses while that screen is open and resumes after.") }
         }
     }
 }

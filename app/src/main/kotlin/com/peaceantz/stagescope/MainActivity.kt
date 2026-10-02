@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.peaceantz.stagescope.assistant.speech.DictationLauncherBinding
 import com.peaceantz.stagescope.ui.nav.ShortcutRequest
 import com.peaceantz.stagescope.ui.nav.StageScopeNavHost
 import com.peaceantz.stagescope.ui.theme.StageScopeTheme
@@ -15,6 +16,7 @@ import com.peaceantz.stagescope.ui.theme.StageScopeTheme
 class MainActivity : ComponentActivity() {
 
     private var pendingRequest by mutableStateOf<ShortcutRequest?>(null)
+    private lateinit var dictationBinding: DictationLauncherBinding
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -28,6 +30,11 @@ class MainActivity : ComponentActivity() {
             pendingRequest = ShortcutRequest.fromIntent(intent)
         }
         val container = (application as StageScopeApp).container
+        // The watch's dictation screen is another app's Activity that covers this one, so its result callback must be registered
+        // here, in the Activity itself, before it is STARTED -- not in a composable, which is gone while that screen is open. Doing it
+        // on every creation (including after a rotation or a process death) is also what lets a result find its way back.
+        // Nothing here opens the dictation screen: that only ever happens for a session the person started with a tap.
+        dictationBinding = DictationLauncherBinding(this, container.dictation)
         setContent {
             val settings by container.settingsRepository.settings.collectAsStateWithLifecycle()
             StageScopeTheme(theme = settings.theme, dimAppearance = settings.dimAppearanceEnabled) {
@@ -44,5 +51,11 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         pendingRequest = ShortcutRequest.fromIntent(intent)
+    }
+
+    override fun onDestroy() {
+        // If this Activity is finishing for good, a dictation screen can no longer report to it; end that session safely.
+        dictationBinding.onActivityFinishing()
+        super.onDestroy()
     }
 }

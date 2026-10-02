@@ -105,6 +105,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
     // "Continue on phone": opens the stored task on the paired phone (RemoteActivityHelper).
     implementation("androidx.wear:wear-remote-interactions:1.2.0")
+    // The watch's own text-input screen (RemoteInput) for "Type instead". 1.2.0 is the stable release (the alpha-only note this
+    // project once carried is out of date); dictation itself needs no library -- it is a plain RecognizerIntent.
+    implementation("androidx.wear:wear-input:1.2.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")

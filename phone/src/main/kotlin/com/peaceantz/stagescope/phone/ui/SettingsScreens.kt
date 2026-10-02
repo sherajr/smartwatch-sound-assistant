@@ -1,14 +1,8 @@
 package com.peaceantz.stagescope.phone.ui
 
-import android.Manifest
 import android.content.Context
 import android.content.ContextWrapper
-import android.content.pm.PackageManager
-import android.os.Build
-import android.speech.SpeechRecognizer
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -34,11 +28,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import com.peaceantz.stagescope.phone.BuildConfig
 import com.peaceantz.stagescope.phone.MainActivity
 import com.peaceantz.stagescope.phone.PhoneContainer
-import com.peaceantz.stagescope.phone.data.SpeechProviderChoice
 import com.peaceantz.stagescope.phone.data.UsageGuard
 import com.peaceantz.stagescope.phone.data.UsageLimits
 import com.peaceantz.stagescope.phone.google.CalendarInfo
@@ -63,7 +55,7 @@ fun SettingsHomeScreen(nav: (String) -> Unit) {
         listOf(
             Triple("settings/providers", "AI providers", "Keys, models, thorough mode, web search"),
             Triple("settings/google", "Gmail & Calendar", "Connect so confirmed emails and events can be sent from here"),
-            Triple("settings/speech", "Voice & speech", "Microphone, transcription of watch recordings, speaking replies"),
+            Triple("settings/speech", "Voice & speech", "How watch dictation works, speaking replies"),
             Triple("settings/usage", "Usage & limits", "What this app has sent, estimated cost, your own limits"),
             Triple("settings/dev", "Developer", "Test mode, versions, resend to watch"),
         ).forEach { (route, title, subtitle) ->
@@ -151,32 +143,16 @@ fun GoogleScreen(container: PhoneContainer) {
 
 @Composable
 fun SpeechScreen(container: PhoneContainer) {
-    val context = LocalContext.current
-    val settings by container.data.settings.state.collectAsState()
-    var micGranted by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) }
-    val micLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { micGranted = it }
-    val scope = rememberCoroutineScope()
-    val onDevice = remember { Build.VERSION.SDK_INT >= 33 && SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }
     var spoke by remember { mutableStateOf<String?>(null) }
 
     ScreenColumn {
-        Panel("How voice works") {
-            Text("Dictation normally happens on your watch, which turns it into text for you to review before anything is sent. If the watch can't do that, it can send a short recording to this phone to transcribe — the recording is deleted right after.")
-            Note("Voice is never always-on. The microphone is used only while you hold or tap to talk, and it's never started from a Tile or complication.")
+        Panel("How voice input works") {
+            Text("You dictate on your watch, using the watch's own dictation screen. It hands the words back to the watch app, you check them, and only then does the watch send the text — together with any attached measurement — to this phone. This phone never records you, never receives audio, and never transcribes anything.")
+            Note("Watch dictation may need an internet connection. StageScope sends the transcript to your phone for the AI response.")
+            Note("StageScope can't see or control how the watch's dictation service reaches its recognizer; that is the watch's own setting and service.")
         }
-        Panel("This phone") {
-            StatusRow("Microphone permission", if (micGranted) "Allowed" else "Not allowed — needed only to transcribe watch recordings on this phone", if (micGranted) Tone.OK else Tone.WARN)
-            if (!micGranted) Button(onClick = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) }) { Text("Allow microphone") }
-            StatusRow("On-device speech recognition", if (onDevice) "Available" else "Not available on this phone", if (onDevice) Tone.OK else Tone.WARN)
-        }
-        Panel("Cloud transcription (optional)") {
-            SwitchRow(
-                "Use OpenAI to transcribe watch recordings", "Off by default. Only used if on-device recognition fails. Uploads that one recording to OpenAI with your own OpenAI key, about \$0.0045 per audio minute (checked 2026-10-01); it's counted in Usage.",
-                settings.speechProvider == SpeechProviderChoice.OPENAI,
-            ) { on -> scope.launch { container.data.settings.update { it.copy(speechProvider = if (on) SpeechProviderChoice.OPENAI else SpeechProviderChoice.NONE) } } }
-            if (settings.speechProvider == SpeechProviderChoice.OPENAI && !container.providers.hasKey(ProviderId.OPENAI)) {
-                Note("This needs an OpenAI key (Settings → AI providers).", tone = Tone.WARN)
-            }
+        Panel("Older recordings") {
+            Note("Earlier versions of the watch app could record a short clip and ask this phone to turn it into text. That is turned off: a recording an older watch app offers is refused, nothing is uploaded to any cloud service, and the watch keeps the recording until you delete it there.")
         }
         Panel("Speaking replies") {
             Text("Replies are silent by default (theatre-safe). Tap Speak under any reply to hear it on this phone.")
@@ -187,7 +163,7 @@ fun SpeechScreen(container: PhoneContainer) {
     }
 }
 
-// ------------------------------------------------------------------------------------------ Usage
+// ---------------------------------------------------------------------------------------------------- Usage
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

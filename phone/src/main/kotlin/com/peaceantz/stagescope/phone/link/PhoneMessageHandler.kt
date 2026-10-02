@@ -32,6 +32,8 @@ import com.peaceantz.stagescope.shared.protocol.RequestState
 import com.peaceantz.stagescope.shared.protocol.StatusQuery
 import com.peaceantz.stagescope.shared.protocol.StatusReply
 import com.peaceantz.stagescope.shared.protocol.SyncNudge
+import com.peaceantz.stagescope.shared.protocol.TranscriptResult
+import com.peaceantz.stagescope.shared.protocol.VoiceOffer
 import com.peaceantz.stagescope.shared.protocol.Wire
 import com.peaceantz.stagescope.shared.protocol.WireCodec
 
@@ -42,6 +44,12 @@ interface WorkScheduler {
     fun enqueueAssistant(requestId: String)
     fun cancelAssistant(requestId: String)
     fun enqueueConfirm(cmd: ConfirmCommand)
+
+    /**
+     * Cancels transcription jobs that an earlier version queued for watch recordings, and nothing else (not AI requests, not
+     * confirmations, not sync). Safe to call every start: it finds nothing once they are gone.
+     */
+    fun cancelLegacyTranscription()
 }
 
 interface Continuations {
@@ -66,7 +74,6 @@ class PhoneMessageHandler(
     private val appVersionName: String,
     private val appVersionCode: Long,
     private val hasKey: (ProviderId) -> Boolean,
-    private val onVoiceOffer: (com.peaceantz.stagescope.shared.protocol.VoiceOffer) -> Unit = {},
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     suspend fun handleBytes(bytes: ByteArray) {
@@ -92,9 +99,12 @@ class PhoneMessageHandler(
             }
             is ProviderSelect -> onProviderSelect(m)
             is SyncNudge -> publishAll()
-            is com.peaceantz.stagescope.shared.protocol.VoiceOffer -> {
-                onVoiceOffer(m)
-                link.send(Ack(m.requestId, AckStatus.RECEIVED, "Recording offer received; waiting for the audio."))
+            // An older watch app may still offer a recording. StageScope no longer turns recordings into text -- not on this phone, and
+            // never by uploading audio to a cloud service -- so say so in the two shapes an older watch understands (a refused ack and a
+            // failed transcript, which it shows next to the recording) and keep nothing: no audio, no job, no cost.
+            is VoiceOffer -> {
+                link.send(Ack(m.requestId, AckStatus.REJECTED, LEGACY_VOICE_REFUSAL))
+                link.send(TranscriptResult(m.requestId, m.memoId, error = LEGACY_VOICE_REFUSAL))
             }
             else -> Unit // Ack/Progress/etc. are phone->watch only
         }
@@ -107,7 +117,7 @@ class PhoneMessageHandler(
         link.send(
             Hello(
                 installId = phoneInstallId(), role = DeviceRole.PHONE, appVersionName = appVersionName, appVersionCode = appVersionCode,
-                selectedVersion = negotiated, features = setOf("assistant", "issues", "actions", "voice-transcribe"),
+                selectedVersion = negotiated, features = setOf("assistant", "issues", "actions"),
                 timezoneId = java.time.ZoneId.systemDefault().id,
             ),
         )
@@ -207,3 +217,7 @@ class PhoneMessageHandler(
         data.conversations.recent(1).firstOrNull()?.let { publisher.publishThread(it.id, null, RequestState.COMPLETED) }
     }
 }
+
+/** What an older watch app is told when it offers a recording. It shows this next to the recording. */
+const val LEGACY_VOICE_REFUSAL =
+    "StageScope no longer turns recordings into text. Update the StageScope watch app and use the watch's own dictation screen instead."

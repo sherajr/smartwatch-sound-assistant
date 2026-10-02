@@ -24,11 +24,7 @@ import com.peaceantz.stagescope.phone.security.CredentialStore
 import com.peaceantz.stagescope.phone.security.EncryptedFileCredentialStore
 import com.peaceantz.stagescope.phone.tools.ContinueTarget
 import com.peaceantz.stagescope.phone.tools.ToolRegistry
-import com.peaceantz.stagescope.phone.voice.AndroidSpeechTranscriber
-import com.peaceantz.stagescope.phone.voice.OpenAiTranscriber
 import com.peaceantz.stagescope.phone.voice.PhoneSpeech
-import com.peaceantz.stagescope.phone.voice.TranscriberChain
-import com.peaceantz.stagescope.phone.voice.VoiceReceiver
 import com.peaceantz.stagescope.phone.work.WorkManagerScheduler
 import com.peaceantz.stagescope.shared.actions.ActionError
 import com.peaceantz.stagescope.shared.actions.ActionEvent
@@ -101,22 +97,22 @@ class PhoneContainer(context: Context) {
         googleEmail = { data.settings.value.googleAccountEmail },
     )
 
-    private val transcriber = {
-        val cloud = if (data.settings.value.speechProvider == com.peaceantz.stagescope.phone.data.SpeechProviderChoice.OPENAI) OpenAiTranscriber(http, credentials) else null
-        TranscriberChain(AndroidSpeechTranscriber(appContext), cloud)
-    }
-    val voiceReceiver = VoiceReceiver(appContext, data, watchLink, transcriber)
     val issueSync = IssueSync(data, publisher)
 
     val messageHandler = PhoneMessageHandler(
         data = data, link = watchLink, publisher = publisher, scheduler = scheduler, executor = executor,
         continuations = continuations, phoneInstallId = { data.settings.value.phoneInstallId },
         appVersionName = BuildConfig.VERSION_NAME, appVersionCode = BuildConfig.VERSION_CODE.toLong(),
-        hasKey = credentials::has, onVoiceOffer = voiceReceiver::onOffer,
+        hasKey = credentials::has,
     )
 
     init {
         appScope.launch { reconcileAfterRestart() }
+        // A cloud-transcription opt-in from an earlier version no longer means anything; make the stored setting say so.
+        appScope.launch { data.settings.update { if (it.speechProvider == com.peaceantz.stagescope.phone.data.SpeechProviderChoice.NONE) it else it.copy(speechProvider = com.peaceantz.stagescope.phone.data.SpeechProviderChoice.NONE) } }
+        // Recording transcription is gone. Anything an earlier version left queued for it is cancelled so it can never run a
+        // recognizer or send audio to a paid cloud service. (AI, confirmation and sync work is untouched.)
+        runCatching { scheduler.cancelLegacyTranscription() }
     }
 
     // --------------------------------------------------------------------------- worker entry points
@@ -141,8 +137,6 @@ class PhoneContainer(context: Context) {
             ),
         )
     }
-
-    suspend fun runTranscription(memoId: String, requestId: String, sampleRateHz: Int) = voiceReceiver.transcribe(memoId, requestId, sampleRateHz)
 
     // ---------------------------------------------------------------------------- UI-facing helpers
 

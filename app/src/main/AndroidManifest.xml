@@ -10,6 +10,20 @@
     <!-- Only for the optional "vibrate on answers" preference, which is off by default. -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!--
+        Package visibility (Android 11+) for the two system input screens StageScope can open: the watch's dictation screen and its
+        text-input screen. Needed only to ask "is there one?" before pausing measurement; the screens themselves are the watch's own
+        and are never named here. StageScope does not record audio, so it needs no recognition-service query.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+        <intent>
+            <action android:name="android.support.wearable.input.action.REMOTE_INPUT" />
+        </intent>
+    </queries>
+
     <application
         android:name=".StageScopeApp"
         android:allowBackup="false"
@@ -38,7 +52,7 @@
         <!--
             Receives phone replies, durable thread/provider/show/issue data items and capability
             changes. Every callback only persists and returns; nothing here ever starts the
-            microphone (the assistant listens only while a person is actively using its mic button).
+            microphone or a dictation (the watch's dictation screen opens only from a person's tap in the assistant).
         -->
         <service
             android:name=".assistant.WatchMessageService"
