@@ -148,7 +148,22 @@ disappearing against the screen background).
 
 All timing uses an injected `MonotonicClock` (`System.nanoTime()`-based in production), never a frame counter, so behavior is identical whether frames arrive at 10Hz or in a burst. Full behavioral contract — jitter, transient rejection, dwell timing, dropout tolerance, held-frequency freezing, auto-hold expiry/reselection, recurring-tone dedup (resolution-aware), five simultaneous/sequential captures, a sixth candidate's eviction rules, all-five-pinned behavior, clear-unpinned, most-prominent selection/hysteresis/stickiness, restore-from-disk id stability — is in `RingTrackerTest`, including a full-pipeline acceptance test (real FFT + synthesized PCM) for the spec's "2.15kHz for one second, then silence, then a separate 3.2kHz tone" scenario.
 
-This is a heuristic on spectral shape and time alone. It cannot distinguish acoustic feedback from a sustained musical tone, does not identify a source, and never suggests an EQ cut — the UI always labels results "Possible ring" with that caveat visible in Ring's details screen. Haptics are not implemented at all this pass (satisfies "default off" trivially).
+This is a heuristic on spectral shape and time alone. It cannot distinguish acoustic feedback from a sustained musical tone, does not identify a source, and never suggests an EQ cut — the UI always labels results "Possible ring" with that caveat visible in Ring's details screen. The instruments have no haptics; the only vibration anywhere is the assistant's optional "vibrate on answers" preference, which is off by default.
+
+## Measurement snapshots for the AI assistant (`MeasurementContext`)
+
+When you ask the assistant a question, the watch attaches a **snapshot of what the instruments were showing the instant you tapped** (`assistant/measure/MeasurementSnapshotBuilder`, schema v1, shared type in `:shared`). It is built from the live DSP state — never a screenshot — and its rules are the measurement rules above, restated for an AI reader:
+
+- **Taken before speech, never relabelled.** `capturedAtEpochMs` is the moment of the tap. A snapshot that travels later (an offline voice memo, a question queued while the phone was away) keeps that time; the assistant is told how old it is.
+- **Raw dBFS and Estimated SPL are separate fields.** `level.rmsDbfs`, `peakDbfs`, `maxRmsDbfs`, `sessionAverageRmsDbfs` are always raw dBFS (the on-screen MAX/AVG, which carry the calibration offset, are un-offset before they go in). `calibration.estimatedSplDb` is `raw RMS + offset` and exists only when calibration applies to the current input configuration. The spectrum and the sample peak are never offset (`MeasurementSnapshotBuilderTest`).
+- **Rings are history unless recently heard.** Each ring carries `lastObservedAgoMs` (relative to the tracker's monotonic clock *at snapshot time*), how long it persisted, pinned/restored flags, and a freshness derived from observation timing: `LIVE_NOW` (heard within 0.4 s while capture runs), `RECENTLY_SEEN` (within the auto-hold window), `STALE`, or `RESTORED_NOT_REOBSERVED`. A pin only protects a slot from eviction; it is not evidence the tone is sounding. `prominenceDb` is detector contrast, passed through labelled as such.
+- **Run state is explicit:** running / paused for voice / stopped / not started / error; when not running, the notes say how many seconds old the readings are. Freeze is reported (`run.spectrumFrozen`, `spectrum.held`).
+- **Spectrum evidence:** the 56 max-aggregated bands, up to 8 native-resolution peaks (strongest first, ≥ 3 bins apart) each with its contrast over the neighbouring ±6 bins and its ±4 neighbouring bins, and a crude noise-floor estimate (median bin level above 100 Hz).
+- **History:** a ≤ 40-point, ~10 s trail sampled at 4 Hz **only while measurement runs** (a pause leaves a gap that ages out). It lives in memory, is never persisted, and is never uploaded except inside a snapshot you asked about.
+- **Deterministic caveats** (`MeasurementQuality.notes`): demo data is a synthetic test signal; one wrist microphone cannot tell which console channel or loudspeaker produced a peak; clipping refers to the watch microphone input only; uncalibrated dBFS is not sound pressure level; Estimated SPL is one broadband offset, not certified or A-weighted.
+- **Size:** at most ~24 KB; if larger it drops history, then peak neighbour bins, then extra peaks, then bands, and says what it dropped.
+
+Asking the assistant **pauses** measurement for the utterance (`audio/AudioCoordinator`): the microphone is released (`CaptureStatus.Paused`), Analyzer keeps showing the last reading with a "PAUSED · listening/speaking/phone" badge, Ring stops looking for new tones but keeps every capture and pin, and a Calibration reference window in progress is aborted like any other dropout. It resumes only if it was running, is still paused (Stop or the keep-awake countdown ending cancels it), the app is on screen, and the permission is still granted — otherwise the paused session is ended cleanly. The phone speaking pauses it too.
 
 ## The watch-face complication and Tile: cached data only
 
@@ -177,8 +192,11 @@ Centralized in `dsp/FrequencyBands.kt` (Rumble 20–80 Hz, Body 80–250 Hz, War
       CLIP badge (don't do this loudly/repeatedly near the mic). Swipe to Ring and back → Analyzer is
       still running, numbers did not reset.
 - [ ] Analyzer Details → Reset zeroes max/average/elapsed and clears peak hold without stopping capture.
-- [ ] Background the app (crown/home) while measuring → reopen → Paused, not stale numbers shown as
-      if live.
+- [ ] Background the app (crown/home) while measuring → reopen. *Observe and record what actually
+      happens* (the app has no foreground service and does not stop the session on backgrounding; the
+      keep-awake countdown does): expected is either a running session or "Silence — check mic" if
+      Android silenced the input — never stale numbers that look live. (An earlier version of this
+      checklist said it should show "Paused"; the code never did that.)
 - [ ] Analyzer: tap the ring to move the selection cursor; turn the crown to move it by one band at a
       time; confirm the crown does NOT page while the dial is focused; confirm the frequency/dB
       readout always matches the highlighted band, not a different one.
@@ -249,3 +267,29 @@ Centralized in `dsp/FrequencyBands.kt` (Rumble 20–80 Hz, Body 80–250 Hz, War
 - [ ] With calibration active, confirm the level meter uses the Estimated-SPL range (Analyzer
       Details → "Level meter range") and is never pinned at 100% by a positive SPL number the way a
       -90..0 dBFS scale would misread it.
+
+### Assistant (phone-backed) — added with the AI assistant
+
+- [ ] Swipe ANALYZER → RING → ASSISTANT: the page order is exactly that; the crown **scrolls** the
+      Assistant page (it does not rotate it); at a rotated display angle the page, Listen, Reply and Action
+      screens are all drawn at that same angle.
+- [ ] Assistant page, round screen: the mic button, status line, provider chip, show chip, task cards and
+      the bottom of the list are all fully visible (no text cut by the bezel) at default and the largest font
+      size. No screen has more than **two** round buttons in its lower row.
+- [ ] Tap the mic: the Listen screen appears and only *then* does the microphone start (check the system
+      mic indicator). Say something → you see **what it heard** before anything is sent; ● records again; ▶
+      sends. ✕ at any point sends nothing.
+- [ ] While Analyzer is measuring, ask a question: Analyzer shows **PAUSED · listening** with its last reading,
+      returns to live afterwards, Freeze (if on) is still on, Ring pins are untouched. Press **Stop** while it is
+      paused: it must stay stopped. Let the 2-minute countdown end while paused: it must stay stopped.
+- [ ] Ask with Analyzer **stopped**: measurement is not started by the question.
+- [ ] Ask about rings with a pinned ring from an earlier session and nothing sounding: the answer calls it
+      saved/held, **not** currently ringing.
+- [ ] Theatre mode (default): no sound and no vibration on an answer; **Speak this** with no headphones asks first.
+      Measurement pauses while it speaks and resumes after; the phone's Speak pauses it too.
+- [ ] A Tile / complication tap, and the "Ask AI" Tile, open the Assistant page and **never** start the
+      microphone or a measurement.
+- [ ] Analyzer Details and Ring Details each have "Ask AI about this"; it opens the Listen screen with that
+      screen's measurement attached.
+- [ ] Phone away: a question shows *Waiting for your phone*; reconnect within 3 min sends it, after 3 min it
+      asks first. Logging an issue works with no phone and appears on the phone later.

@@ -21,7 +21,7 @@ import com.peaceantz.stagescope.ui.components.DetailButton
 import com.peaceantz.stagescope.ui.rotation.OrientationViewModel
 
 @Composable
-fun RingDetailsScreen(viewModel: RingViewModel, orientationViewModel: OrientationViewModel) {
+fun RingDetailsScreen(viewModel: RingViewModel, orientationViewModel: OrientationViewModel, onAskAi: () -> Unit) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val isMeasuring = state is RingUiState.Measuring
     val orientationLocked by orientationViewModel.locked.collectAsStateWithLifecycle()
@@ -51,6 +51,9 @@ fun RingDetailsScreen(viewModel: RingViewModel, orientationViewModel: Orientatio
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+
+        // Optional: sends the ring bank (with how recently each tone was actually heard) and your spoken question to the assistant.
+        item { DetailButton(onClick = onAskAi, modifier = Modifier.fillMaxWidth()) { Text("Ask AI about this") } }
 
         item {
             if (isMeasuring) {

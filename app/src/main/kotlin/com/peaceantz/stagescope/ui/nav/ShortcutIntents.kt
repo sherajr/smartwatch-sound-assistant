@@ -16,6 +16,9 @@ const val SHORTCUT_OPEN_LEVEL = "level"
 const val SHORTCUT_OPEN_SPECTRUM = "spectrum"
 const val SHORTCUT_OPEN_RING = "ring"
 
+/** Opens the Assistant page. Like every shortcut here it can never start a microphone: listening only begins from the mic button on that page. */
+const val SHORTCUT_ASK_AI = "ask_ai"
+
 /**
  * One external launch request (Tile tap, complication tap) waiting to be applied to the shared
  * pager/session. [requestId] gives each delivery a distinct identity so a `LaunchedEffect` keyed
@@ -48,6 +51,7 @@ data class ShortcutRequest(
             SHORTCUT_OPEN_LEVEL -> ShortcutRequest(requestId, ModePage.ANALYZER)
             SHORTCUT_OPEN_SPECTRUM -> ShortcutRequest(requestId, ModePage.ANALYZER)
             SHORTCUT_OPEN_RING -> ShortcutRequest(requestId = requestId, page = ModePage.RING, ringCaptureId = ringCaptureId)
+            SHORTCUT_ASK_AI -> ShortcutRequest(requestId = requestId, page = ModePage.ASSISTANT) // never startMeasure, never a microphone
             else -> null
         }
     }

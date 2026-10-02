@@ -7,6 +7,7 @@ import com.peaceantz.stagescope.AppContainer
 import com.peaceantz.stagescope.audio.CaptureConfig
 import com.peaceantz.stagescope.audio.CaptureSession
 import com.peaceantz.stagescope.audio.CaptureStatus
+import com.peaceantz.stagescope.audio.PauseReason
 import com.peaceantz.stagescope.data.LastReadingSummary
 import com.peaceantz.stagescope.data.SpectrumSnapshot
 import com.peaceantz.stagescope.dsp.DbScale
@@ -83,6 +84,13 @@ class AnalyzerViewModel(private val container: AppContainer, private val session
     private val _uiState = MutableStateFlow<AnalyzerUiState>(AnalyzerUiState.NotStarted)
     val uiState: StateFlow<AnalyzerUiState> = _uiState.asStateFlow()
 
+    /**
+     * Non-null while the microphone is lent to the assistant. The last reading stays on screen (the
+     * session, meters and Freeze are untouched); the page only adds a "paused" badge.
+     */
+    private val _pauseReason = MutableStateFlow<PauseReason?>(null)
+    val pauseReason: StateFlow<PauseReason?> = _pauseReason.asStateFlow()
+
     val snapshots: StateFlow<List<SpectrumSnapshot>> = container.snapshotRepository.snapshots
     private val _compareSnapshot = MutableStateFlow<SpectrumSnapshot?>(null)
     val compareSnapshot: StateFlow<SpectrumSnapshot?> = _compareSnapshot.asStateFlow()
@@ -107,6 +115,9 @@ class AnalyzerViewModel(private val container: AppContainer, private val session
     }
 
     fun start() {
+        // A paused session is still the same session: restarting here would reset Freeze and the
+        // keep-awake countdown. It resumes by itself when the voice interaction ends.
+        if (session.isPaused) return
         lastBlockRealtime = 0L
         userFrozen = false
         userMovedCursor = false
@@ -134,7 +145,7 @@ class AnalyzerViewModel(private val container: AppContainer, private val session
 
     fun resume() {
         userFrozen = false
-        if (!session.isRunning) session.start()
+        if (!session.isRunning && !session.isPaused) session.start()
         republish()
     }
 
@@ -191,7 +202,10 @@ class AnalyzerViewModel(private val container: AppContainer, private val session
     }
 
     private fun handleStatus(status: CaptureStatus) {
+        _pauseReason.value = (status as? CaptureStatus.Paused)?.reason
         when (status) {
+            // Deliberately no state change: the last reading stays visible, with a badge.
+            is CaptureStatus.Paused -> Unit
             is CaptureStatus.Running -> {
                 currentConfig = status.config
                 viewModelScope.launch {
@@ -269,6 +283,7 @@ class AnalyzerViewModel(private val container: AppContainer, private val session
         )
         lastReading = reading
         _uiState.value = AnalyzerUiState.Measuring(reading)
+        container.measurementHub.publishAnalyzer(reading, config, calibration, recordHistory = true)
     }
 
     /** Returns null (keep showing the previous frame) while frozen or before the first full frame. */
@@ -306,6 +321,8 @@ class AnalyzerViewModel(private val container: AppContainer, private val session
         if (_uiState.value is AnalyzerUiState.Measuring) {
             _uiState.value = AnalyzerUiState.Measuring(updated)
         }
+        // Freeze/resume changes what the assistant should be told ("spectrum was held").
+        currentConfig?.let { container.measurementHub.publishAnalyzer(updated, it, container.settingsRepository.settings.value.calibration, recordHistory = false) }
     }
 
     private val keepAwakeRemaining: Int get() = _keepAwakeRemainingSeconds.value

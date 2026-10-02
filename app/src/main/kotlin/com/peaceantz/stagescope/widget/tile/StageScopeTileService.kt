@@ -112,7 +112,7 @@ class StageScopeTileService : TileService() {
  * onTileRequest runs, so there's no async work -- this just hands the already-computed value back
  * as a [ListenableFuture] without pulling in full Guava for a single `Futures.immediateFuture`.
  */
-private fun <T> immediateFuture(value: T): ListenableFuture<T> =
+internal fun <T> immediateFuture(value: T): ListenableFuture<T> =
     CallbackToFutureAdapter.getFuture { completer ->
         completer.set(value)
         "stagescope-tile-immediate-future"
@@ -190,7 +190,7 @@ private val SPACER_DP = dp(6f)
  * goes through [EXTRA_SHORTCUT] instead, the same contract the complication's real PendingIntents
  * use. Each shortcut gets its own Clickable [id] so the system treats them as distinct targets.
  */
-private fun shortcutClickable(
+internal fun shortcutClickable(
     context: Context,
     id: String,
     shortcut: String,
@@ -206,7 +206,7 @@ private fun shortcutClickable(
 
 /** Reuses the app's own active palette + Dim setting (ui/theme/Theme.kt) so the Tile visibly
  *  follows the in-app theme choice, not just the app's own buttons. */
-private fun stageScopeTileColorScheme(palette: StageScopePalette, dim: Boolean): ColorScheme {
+internal fun stageScopeTileColorScheme(palette: StageScopePalette, dim: Boolean): ColorScheme {
     val live = if (dim) palette.LiveDim else palette.Live
     val held = if (dim) palette.HeldDim else palette.Held
     val primaryText = if (dim) palette.PrimaryTextDim else palette.PrimaryText

@@ -162,8 +162,15 @@ class RingViewModel(private val container: AppContainer, private val session: Ca
     }
 
     private fun handleStatus(status: CaptureStatus) {
-        _isActive.value = status is CaptureStatus.Running
+        // A pause for the assistant keeps the session alive (the bottom control still reads "Stop").
+        _isActive.value = status is CaptureStatus.Running || status is CaptureStatus.Paused
         when (status) {
+            // Nothing is being listened for while the microphone is lent out: transient tracks end, but
+            // every capture (and every pin) stays in the bank exactly as it was.
+            is CaptureStatus.Paused -> {
+                tracker.setAcquisitionActive(false)
+                publishCurrent()
+            }
             is CaptureStatus.Running -> {
                 val config = status.config
                 if (currentConfig?.fingerprint() != config.fingerprint()) {
@@ -196,6 +203,7 @@ class RingViewModel(private val container: AppContainer, private val session: Ca
         _uiState.value = RingUiState.Measuring(
             RingMeasurement(snap, frame, config.sourceLabel, config.isDemo, slotCaptureIds)
         )
+        publishToHub(snap, config)
         maybePersistRingSummary(snap, config.isDemo)
     }
 
@@ -207,7 +215,18 @@ class RingViewModel(private val container: AppContainer, private val session: Ca
         _uiState.value = RingUiState.Measuring(
             RingMeasurement(snap, null, config?.sourceLabel ?: "", config?.isDemo ?: false, slotCaptureIds)
         )
+        publishToHub(snap, config)
         maybePersistRingSummary(snap, config?.isDemo ?: false)
+    }
+
+    /** Hands the assistant the bank as it is now; captures' ages are worked out at question time, not here. */
+    private fun publishToHub(snap: RingSnapshot, config: CaptureConfig?) {
+        val autoHold = tracker.settings.autoHoldMs
+        val now = SystemMonotonicClock.nowMillis()
+        val live = snap.history.count {
+            it.stateAt(now, autoHold, liveGraceMs = com.peaceantz.stagescope.assistant.measure.MeasurementSnapshotBuilder.LIVE_GRACE_MS) == RingCaptureState.LIVE
+        }
+        container.measurementHub.publishRing(snap, config, autoHold, live)
     }
 
     /**

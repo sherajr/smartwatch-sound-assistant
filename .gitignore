@@ -9,6 +9,23 @@ app/build/
 captures/
 .externalNativeBuild/
 *.apk
+*.aab
 *.log
+
+# Signing keys, API keys and OAuth/Firebase config must never be committed.
+# (This app has no release signing config; the phone and watch share the machine's debug key.)
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+keystore.properties
+signing.properties
+.env
+.env.*
+google-services.json
+client_secret*.json
+service-account*.json
+*.hprof
 .DS_Store
 Thumbs.db

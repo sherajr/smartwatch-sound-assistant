@@ -27,6 +27,7 @@ fun AnalyzerDetailsScreen(
     onOpenSnapshots: () -> Unit,
     onOpenAppearance: () -> Unit,
     onOpenWatchShortcuts: () -> Unit,
+    onAskAi: () -> Unit,
     settingsViewModel: SettingsViewModel = viewModel { SettingsViewModel(container) },
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -41,6 +42,8 @@ fun AnalyzerDetailsScreen(
     ) {
         item { Text("Analyzer details", color = MaterialTheme.colorScheme.onBackground) }
 
+        // Optional: sends this measurement (taken the moment you tap) with your spoken question to the phone-backed assistant.
+        item { DetailButton(onClick = onAskAi, modifier = Modifier.fillMaxWidth()) { Text("Ask AI about this") } }
         item { DetailButton(onClick = viewModel::reset, modifier = Modifier.fillMaxWidth()) { Text("Reset") } }
         item { DetailButton(onClick = viewModel::clearPeakHold, modifier = Modifier.fillMaxWidth()) { Text("Clear peak hold") } }
 

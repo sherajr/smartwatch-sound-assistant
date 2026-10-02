@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Advertised so the phone companion can discover this watch app via the Data Layer (read by Play services by name). -->
+    <string-array name="android_wear_capabilities" tools:ignore="UnusedResources">
+        <item>stagescope_watch_app</item>
+    </string-array>
+</resources>

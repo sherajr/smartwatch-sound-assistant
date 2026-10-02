@@ -38,12 +38,24 @@ if ($sdkOk) {
         $adb = Get-StageScopeAdbPath
         Write-Check "adb" $true $adb
         Write-Output ""
-        Write-Output "Connected devices:"
-        & $adb devices -l | Select-Object -Skip 1 | Where-Object { $_.Trim() -ne "" } | ForEach-Object { Write-Output "  $_" }
+        Write-Output "Connected devices (the watch app and the phone app are different APKs; install scripts check the kind):"
+        $devices = @(Get-StageScopeDevices)
+        if ($devices.Count -eq 0) { Write-Output "  none" }
+        $listed = @{}
+        foreach ($d in $devices) {
+            $kind = if ($d.State -ne "device") { $d.State } elseif ($d.IsWatch) { "WATCH  -> scripts\install-launch.ps1" } else { "PHONE  -> scripts\install-phone.ps1" }
+            # Wi-Fi debugging often lists one device under two names; say so instead of looking like two watches.
+            if ($d.State -eq "device" -and $listed.ContainsKey($d.HardwareId)) { $kind = "same device as $($listed[$d.HardwareId])" }
+            elseif ($d.State -eq "device") { $listed[$d.HardwareId] = $d.Serial }
+            Write-Output ("  {0,-24} {1,-18} {2}" -f $d.Serial, $d.Model, $kind)
+        }
     } catch {
         Write-Check "adb" $false
     }
 }
+
+$apksPresent = (Test-Path $script:WatchApk) -and (Test-Path $script:PhoneApk)
+Write-Check "Watch + phone APKs built" $apksPresent $(if ($apksPresent) { "run scripts\check-signing.ps1 to confirm they share one signing key" } else { "run scripts\build.ps1" })
 
 if ($javaOk -and $sdkOk) {
     Write-Output ""

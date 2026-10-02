@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
+import com.peaceantz.stagescope.audio.PauseReason
 import com.peaceantz.stagescope.ui.components.CompactGlyphButton
 import com.peaceantz.stagescope.ui.components.KeepScreenOnEffect
 import com.peaceantz.stagescope.ui.components.PrimaryActionRow
@@ -56,6 +57,7 @@ fun AnalyzerScreen(
     onOpenDetails: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val pauseReason by viewModel.pauseReason.collectAsStateWithLifecycle()
     val compareSnapshot by viewModel.compareSnapshot.collectAsStateWithLifecycle()
     LaunchedEffect(compareSnapshotId) { viewModel.setCompareSnapshot(compareSnapshotId) }
 
@@ -125,7 +127,7 @@ fun AnalyzerScreen(
                         role = Role.Button
                     },
             )
-            AnalyzerCenterBody(state = state, palette = palette)
+            AnalyzerCenterBody(state = state, palette = palette, pauseReason = pauseReason)
         }
 
         PrimaryActionRow(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)) {
@@ -146,7 +148,7 @@ fun AnalyzerScreen(
 }
 
 @Composable
-private fun AnalyzerCenterBody(state: AnalyzerUiState, palette: StageScopePalette) {
+private fun AnalyzerCenterBody(state: AnalyzerUiState, palette: StageScopePalette, pauseReason: PauseReason?) {
     when (state) {
         AnalyzerUiState.NotStarted -> StateBadge("●", "Ready", MaterialTheme.colorScheme.onSurfaceVariant)
         AnalyzerUiState.PermissionDenied -> StateBadge("⚠", "Mic permission denied", palette.Held)
@@ -155,7 +157,10 @@ private fun AnalyzerCenterBody(state: AnalyzerUiState, palette: StageScopePalett
         AnalyzerUiState.Paused -> StateBadge("●", "Paused", MaterialTheme.colorScheme.onSurfaceVariant)
         is AnalyzerUiState.Measuring -> {
             val reading = state.reading
-            if (reading.isClippingNow) {
+            if (pauseReason != null) {
+                // The reading below is the last one before the pause, not live: say so, in words.
+                StateBadge("‖", pauseBadgeText(pauseReason), palette.Held)
+            } else if (reading.isClippingNow) {
                 StateBadge("⚠", "CLIP", palette.Held)
             } else if (reading.isSuspiciousSilence) {
                 StateBadge("⚠", "Silence — check mic", palette.Held)
@@ -186,6 +191,12 @@ private fun AnalyzerCenterBody(state: AnalyzerUiState, palette: StageScopePalett
             }
         }
     }
+}
+
+private fun pauseBadgeText(reason: PauseReason): String = when (reason) {
+    PauseReason.ASSISTANT_LISTENING -> "PAUSED · listening"
+    PauseReason.ASSISTANT_SPEAKING -> "PAUSED · speaking"
+    PauseReason.PHONE_PLAYBACK -> "PAUSED · phone"
 }
 
 private fun unitLine(reading: AnalyzerReading): String {
