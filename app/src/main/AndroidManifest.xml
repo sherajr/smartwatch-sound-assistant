@@ -38,6 +38,12 @@
             android:name="com.google.android.wearable.standalone"
             android:value="true" />
 
+        <!-- The Wear SDK system library: its GestureInputManager delivers the double pinch used for tap tempo (Wear OS 7+).
+             Optional: without it the gesture is unavailable and tapping on screen still works. -->
+        <uses-library
+            android:name="wear-sdk"
+            android:required="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

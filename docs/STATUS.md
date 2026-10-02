@@ -1,5 +1,36 @@
 # Status
 
+## Tap tempo on the Analyzer (double pinch)
+
+**What:** while the Analyzer is measuring, a double pinch (Wear OS 7 hand gesture, Pixel Watch 3+) taps the beat; the
+tempo shows next to the clock ("10:42 · 120 BPM", "-- BPM" while a pinch would count, a brief flash per counted beat).
+Analyzer Details → Tap tempo: decimal BPM, ms/beat, tap count, a touch pad (for watches without the gesture) and Clear.
+How the estimate works and its limits: [MEASUREMENTS.md → Tap tempo](MEASUREMENTS.md#tap-tempo-dsptaptempokt-analyzer-page--details).
+
+**How the gesture is reached:** the Wear SDK's `GestureInputManager`, called directly from `input/WearSdkPrimaryGesture`
+and compiled against SDK Platform 37.0's stub (`compileOnly`). Wear Compose 1.7.0's `Modifier.oneHandedGesture` would be
+the usual route, but its AARs require AGP ≥ 9.1 and compileSdk 37; the project stays on AGP 8.13 / compileSdk 36.
+**New build prerequisite:** `sdkmanager "platforms;android-37.0"` (`setup-doctor.ps1` checks it).
+
+### What was actually run
+- Watch unit tests: all pass, including 26 new ones (`TapTempoTest` 17, `PrimaryGestureTimingTest` 5, `TempoFormattingTest` 4).
+  Lint: 0 errors (18 warnings, all dependency-version / pre-existing `WearRecents`).
+- **Wear OS 7 emulator** (new AVD `stagescope_wear7`, API 37): app runs with the real Wear OS 7 `wear-sdk` library loaded;
+  the emulator has no gesture service, and the app correctly reports the gesture unavailable (no "-- BPM", Details says
+  so). Touch pad: 8 taps → 185.5 BPM / 324 ms (the script's actual spacing); "2:22 · 185 BPM" next to the clock on the
+  Analyzer page, plain clock on Ring.
+- **Real Pixel Watch 5 (API 37):** new build installed in place (no uninstall). Its gesture service is present and its
+  history stamps gestures on `uptimeMillis`, the clock `PrimaryGestureTiming` expects. **The gesture itself was not
+  verified:** the watch was on its charger and locked, so StageScope couldn't come to the front. The off-body override
+  was reset. Launching Measure behind the lock screen left a frozen process holding a silenced mic (see CLAUDE.md
+  "Testing the double pinch"); it was ended with `am kill`.
+
+### Still needs you
+The double pinch on your wrist — checklist item "Tap tempo, real wrist" in [MEASUREMENTS.md](MEASUREMENTS.md#manual-test-checklist-run-on-a-real-watch-mark-not-run-if-unavailable),
+including how fast the recognizer will accept consecutive double pinches.
+
+---
+
 ## Watch dictation replaces record-and-transcribe (voice input repair)
 
 **Why:** on the owner's Pixel Watch 5 the assistant recorded the question but never got words back. The old route first required `SpeechRecognizer.isOnDeviceRecognitionAvailable()`; on that watch the only recognition service is Google TTS's `GoogleTTSRecognitionService`, so that check very likely failed on that watch, and the fallback (record, send audio to the phone, the phone's own on-device recognizer, optional OpenAI upload) had the same prerequisite on the phone. The watch's real dictation screen was never tried: `RECOGNIZE_SPEECH` resolves to Gboard's `WearRemoteInputActivity`. (That is the cause the device evidence points to; it was not proven by instrumenting the old build.)

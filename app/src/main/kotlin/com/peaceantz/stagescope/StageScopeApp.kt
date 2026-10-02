@@ -32,6 +32,8 @@ import com.peaceantz.stagescope.data.SettingsRepository
 import com.peaceantz.stagescope.data.SnapshotRepository
 import com.peaceantz.stagescope.data.SurfaceSummaryRepository
 import com.peaceantz.stagescope.demo.DemoSignalGenerator
+import com.peaceantz.stagescope.input.PrimaryGestureSource
+import com.peaceantz.stagescope.input.WearSdkPrimaryGesture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -85,6 +87,9 @@ class AppContainer(context: Context) {
             ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         },
     )
+
+    /** The watch's double-pinch gesture (Wear OS 7+), used only for the Analyzer's tap tempo; unavailable elsewhere. */
+    val primaryGesture: PrimaryGestureSource = WearSdkPrimaryGesture(appContext)
 
     // ---- AI assistant (phone-backed). Everything below is lazy: a watch used only as an instrument never builds any of it.
 
