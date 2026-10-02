@@ -22,6 +22,10 @@ import com.peaceantz.stagescope.shared.actions.ConfirmSource
 class WorkManagerScheduler(private val context: Context) : WorkScheduler {
     private fun wm() = WorkManager.getInstance(context)
 
+    private companion object {
+        const val LEGACY_TRANSCRIBE_WORKER = "com.peaceantz.stagescope.phone.work.TranscribeWorker"
+    }
+
     override fun enqueueAssistant(requestId: String) {
         val request = OneTimeWorkRequestBuilder<AssistantWorker>()
             .setInputData(Data.Builder().putString(AssistantWorker.KEY_REQUEST_ID, requestId).build())
@@ -33,6 +37,15 @@ class WorkManagerScheduler(private val context: Context) : WorkScheduler {
 
     override fun cancelAssistant(requestId: String) {
         wm().cancelUniqueWork("assistant-$requestId")
+    }
+
+    /**
+     * Earlier versions queued a `TranscribeWorker` per watch recording. WorkManager tags every request with its worker's class name,
+     * so cancelling by that tag removes exactly those jobs -- even though the class no longer exists -- and nothing else: AI requests
+     * ("assistant"), confirmations ("confirm") and everything else carry other tags.
+     */
+    override fun cancelLegacyTranscription() {
+        wm().cancelAllWorkByTag(LEGACY_TRANSCRIBE_WORKER)
     }
 
     override fun enqueueConfirm(cmd: ConfirmCommand) {
@@ -83,26 +96,3 @@ class ConfirmWorker(context: Context, params: WorkerParameters) : CoroutineWorke
     }
 }
 
-/** Transcribes a watch recording that arrived over the Data Layer channel. */
-class TranscribeWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
-    override suspend fun doWork(): Result {
-        val memo = inputData.getString(KEY_MEMO) ?: return Result.failure()
-        val request = inputData.getString(KEY_REQUEST) ?: return Result.failure()
-        (applicationContext as PhoneApp).container.runTranscription(memo, request, inputData.getInt(KEY_RATE, 16_000))
-        return Result.success()
-    }
-
-    companion object {
-        const val KEY_MEMO = "memoId"
-        const val KEY_REQUEST = "requestId"
-        const val KEY_RATE = "rate"
-
-        fun enqueue(context: Context, memoId: String, requestId: String, rate: Int) {
-            val req = OneTimeWorkRequestBuilder<TranscribeWorker>()
-                .setInputData(Data.Builder().putString(KEY_MEMO, memoId).putString(KEY_REQUEST, requestId).putInt(KEY_RATE, rate).build())
-                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-                .build()
-            WorkManager.getInstance(context).enqueueUniqueWork("transcribe-$memoId", ExistingWorkPolicy.KEEP, req)
-        }
-    }
-}

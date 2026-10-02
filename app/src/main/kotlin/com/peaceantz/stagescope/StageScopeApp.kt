@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
@@ -18,9 +19,10 @@ import com.peaceantz.stagescope.assistant.PhoneHandoff
 import com.peaceantz.stagescope.assistant.PhonePlaybackBridge
 import com.peaceantz.stagescope.assistant.WatchIssueRepository
 import com.peaceantz.stagescope.assistant.measure.MeasurementHub
-import com.peaceantz.stagescope.assistant.speech.SpeechInput
+import com.peaceantz.stagescope.assistant.speech.DictationController
+import com.peaceantz.stagescope.assistant.speech.DictationIntents
+import com.peaceantz.stagescope.assistant.speech.DictationStore
 import com.peaceantz.stagescope.assistant.speech.SpeechOutput
-import com.peaceantz.stagescope.assistant.speech.VoiceRecorder
 import com.peaceantz.stagescope.audio.AudioCaptureEngine
 import com.peaceantz.stagescope.audio.AudioCoordinator
 import com.peaceantz.stagescope.audio.AudioMode
@@ -36,8 +38,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 /** Manual constructor-injection container -- deliberately no DI framework for a project this small. */
@@ -63,6 +67,16 @@ class AppContainer(context: Context) {
      * countdown allows it -- see [AudioCoordinator].
      */
     fun isAppForeground(): Boolean = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+
+    /**
+     * Waits (bounded) for StageScope to be on screen again. The watch's dictation screen belongs to another app, so while it is up
+     * this process is in the background -- and a result can be handed to us a moment before the app counts as foreground again.
+     * Measurement is resumed only once this returns true; otherwise the paused session is ended instead (see [AudioCoordinator]).
+     */
+    suspend fun awaitForeground(timeoutMs: Long = FOREGROUND_WAIT_MS): Boolean =
+        isAppForeground() || withTimeoutOrNull(timeoutMs) {
+            ProcessLifecycleOwner.get().lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.STARTED) }
+        } != null
 
     val audioCoordinator = AudioCoordinator(
         nowMs = SystemClock::elapsedRealtime,
@@ -90,10 +104,26 @@ class AppContainer(context: Context) {
         )
     }
     val issues: WatchIssueRepository by lazy { WatchIssueRepository(File(File(appContext.filesDir, "assistant").apply { mkdirs() }, "issues.json"), phoneLink) }
-    val speechInput: SpeechInput by lazy { SpeechInput(appContext) }
-    val voiceRecorder: VoiceRecorder by lazy { VoiceRecorder(appContext) }
     val speechOutput: SpeechOutput by lazy { SpeechOutput(appContext, audioCoordinator, appScope) }
     val phoneHandoff: PhoneHandoff by lazy { PhoneHandoff(appContext) }
+
+    /**
+     * Dictation: StageScope never records the person. It opens the watch's own dictation screen and takes the text it returns
+     * (see [DictationController]). One controller for the whole app, so it outlives every Activity and ViewModel -- the system
+     * screen covers StageScope while it runs, and the result must still find its session.
+     */
+    val dictation: DictationController by lazy {
+        DictationController(
+            scope = appScope,
+            audio = audioCoordinator,
+            store = DictationStore(File(File(appContext.filesDir, "assistant").apply { mkdirs() }, "dictation.json")),
+            availability = DictationIntents.Availability(appContext),
+            awaitForeground = { awaitForeground() },
+            stopSpeaking = { speechOutput.stop() },
+            log = { Log.d(DICTATION_TAG, it) },
+            io = Dispatchers.IO,
+        )
+    }
 
     /** One short buzz when an answer arrives -- only if the person turned vibration on (it is off by default). */
     private fun vibrateIfEnabled() {
@@ -114,6 +144,8 @@ class AppContainer(context: Context) {
      */
     fun startBackgroundWork() {
         appScope.launch(Dispatchers.Default) {
+            // Recordings an earlier version made are kept as they are, but nothing may ever upload them again.
+            runCatching { assistant.migrateLegacyMemos() }
             runCatching {
                 val items = phoneLink.currentDataItems()
                 assistant.handleDataItems(items)
@@ -128,10 +160,7 @@ class AppContainer(context: Context) {
                 poller = appScope.launch(Dispatchers.Default) {
                     runCatching { assistant.requestSync() }
                     while (isActive) {
-                        runCatching {
-                            assistant.flushOutbox()
-                            assistant.uploadPendingMemos()
-                        }
+                        runCatching { assistant.flushOutbox() }
                         delay(POLL_INTERVAL_MS)
                     }
                 }
@@ -156,6 +185,8 @@ class AppContainer(context: Context) {
     private companion object {
         const val POLL_INTERVAL_MS = 8_000L
         const val LEASE_TICK_MS = 2_000L
+        const val FOREGROUND_WAIT_MS = 5_000L
+        const val DICTATION_TAG = "StageScope/Dictation"
     }
 }
 

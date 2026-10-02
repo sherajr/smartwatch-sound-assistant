@@ -8,9 +8,6 @@
     <!-- Only for WorkManager's fallback foreground service (see the <service> note below). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <!-- Phone speech: only when the person taps Speak / dictates on the phone. Never always-listening. -->
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-
     <!-- Package visibility (Android 11+) for the honest handoffs: Keep and Gemini. -->
     <queries>
         <package android:name="com.google.android.keep" />
@@ -22,9 +19,6 @@
         <intent>
             <action android:name="android.intent.action.INSERT" />
             <data android:mimeType="vnd.android.cursor.dir/event" />
-        </intent>
-        <intent>
-            <action android:name="android.speech.RecognitionService" />
         </intent>
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />

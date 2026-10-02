@@ -546,94 +546,144 @@ class AssistantRepositoryTest {
         assertEquals(ContinueUi.Done(ContinueOutcome.OPENED), repo.continueStates.value[id2])
     }
 
-    // -------------------------------------------------------------------------------------- memos
+    // ----------------------------------------------------------------- older recordings (migration)
+    //
+    // Earlier versions recorded short clips and had the phone transcribe them. No version records or uploads now, so these tests
+    // start from what an UPGRADED install already has on disk: a memos.json and the audio files beside it.
 
     private fun memo(id: String = "memo-1", state: MemoState = MemoState.PENDING_PHONE) = VoiceMemo(
         memoId = id, requestId = "req-$id", createdAtEpochMs = now, durationMs = 4_000, sampleRateHz = 16_000, byteCount = 128_000,
         purpose = VoicePurpose.DICTATION, taskKind = TaskKind.FREE_CHAT, state = state,
     )
 
-    @Test
-    fun `a recording made with no phone waits, then is offered and streamed when the phone appears`() = runBlocking {
-        link.phones = emptyList()
-        repo.saveMemo(memo(), ByteArray(128_000))
-        repo.uploadPendingMemos()
-        assertEquals(MemoState.PENDING_PHONE, repo.memos.value.memos.single().state)
-        assertTrue(link.voice.isEmpty())
+    private fun audio(id: String) = File(File(dir, "memos"), "$id.pcm")
 
-        link.phones = listOf(PhoneNode("phone-1", "Pixel 10", true))
-        repo.uploadPendingMemos()
-        assertEquals(MemoState.TRANSCRIBING, repo.memos.value.memos.single().state)
-        assertEquals(1, link.sentOf<VoiceOffer>().size)
-        assertEquals("memo-1", link.voice.single().first)
-        assertEquals("phone-1", link.voice.single().third)
+    /** Puts [memos] on disk the way an earlier version left them (with audio where [withAudio]), then starts the repository fresh. */
+    private fun upgradedInstall(vararg memos: VoiceMemo, withAudio: Boolean = true): AssistantRepository {
+        File(dir, "memos").mkdirs()
+        runBlocking {
+            com.peaceantz.stagescope.shared.store.PersistentState(File(dir, "memos.json"), MemoFile.serializer(), 1, { MemoFile() })
+                .update { MemoFile(memos.toList()) }
+        }
+        if (withAudio) memos.forEach { audio(it.memoId).writeBytes(ByteArray(64) { b -> b.toByte() }) }
+        repo = newRepo()
+        return repo
     }
 
     @Test
-    fun `a transcript replaces the audio, which is then deleted`() = runBlocking {
-        repo.saveMemo(memo(), ByteArray(1_000))
-        repo.uploadPendingMemos()
-        assertTrue(File(repo.memoDir, "memo-1.pcm").exists())
-        repo.handleBytes(encode(TranscriptResult("req-memo-1", "memo-1", text = "Is the lav on mic three ringing?", engine = "On-device")))
-        val m = repo.memos.value.memos.single()
+    fun `an update turns recordings that were waiting for the phone into older recordings and deletes nothing`() = runBlocking {
+        val ctx = MeasurementSnapshotBuilder.build(
+            TestMeasurements.inputs(analyzer = TestMeasurements.analyzerSample(TestMeasurements.reading()), nowEpoch = 1_800_000_000_000L, runState = RunState.RUNNING),
+        )
+        val r = upgradedInstall(
+            memo("a", MemoState.PENDING_PHONE).copy(snapshot = ctx), memo("b", MemoState.UPLOADING), memo("c", MemoState.TRANSCRIBING),
+            memo("d", MemoState.FAILED).copy(error = "The recording couldn't be sent to your phone."),
+        )
+        r.migrateLegacyMemos()
+
+        assertEquals(List(4) { MemoState.LEGACY_RECORDING }, r.memos.value.memos.map { it.state })
+        assertEquals("the failure text belonged to the upload that no longer exists", listOf(null, null, null, null), r.memos.value.memos.map { it.error })
+        assertTrue("every recording is still on the watch", listOf("a", "b", "c", "d").all { audio(it).exists() })
+        assertEquals("its pre-recording measurement keeps its original time", 1_800_000_000_000L, r.memos.value.memos.first { it.memoId == "a" }.snapshot!!.capturedAtEpochMs)
+    }
+
+    @Test
+    fun `the migration is repeatable and leaves transcripts, finished memos and recordings that are already gone alone`() = runBlocking {
+        val r = upgradedInstall(
+            memo("t", MemoState.TRANSCRIPT_READY).copy(transcript = "Is the lav on mic three ringing?", engine = "On-device"),
+            memo("s", MemoState.SENT),
+        )
+        r.migrateLegacyMemos()
+        val once = r.memos.value
+        r.migrateLegacyMemos()
+        assertEquals("running it again changes nothing", once, r.memos.value)
+        assertEquals(MemoState.TRANSCRIPT_READY, r.memos.value.memos.first { it.memoId == "t" }.state)
+        assertEquals("Is the lav on mic three ringing?", r.memos.value.memos.first { it.memoId == "t" }.transcript)
+        assertEquals(MemoState.SENT, r.memos.value.memos.first { it.memoId == "s" }.state)
+
+        // A failed memo whose audio is already gone has nothing left to keep as a recording.
+        val r2 = upgradedInstall(memo("gone", MemoState.FAILED).copy(error = "The recording is gone."), withAudio = false)
+        File(File(dir, "memos"), "gone.pcm").delete()
+        r2.migrateLegacyMemos()
+        assertEquals(MemoState.FAILED, r2.memos.value.memos.single().state)
+    }
+
+    @Test
+    fun `nothing uploads an older recording - not on reconnect, not on hello, not on a sync, not while polling`() = runBlocking {
+        val r = upgradedInstall(memo("a", MemoState.PENDING_PHONE), memo("b", MemoState.UPLOADING))
+        r.migrateLegacyMemos()
+        val before = r.memos.value
+
+        link.phones = emptyList()
+        r.refreshReachability()
+        link.phones = listOf(PhoneNode("phone-1", "Pixel 10", true)) // the phone comes back
+        r.refreshReachability()
+        r.handleBytes(encode(Hello("phone-install", DeviceRole.PHONE, "0.3.0", 3, selectedVersion = 1)))
+        r.requestSync()
+        repeat(3) { r.flushOutbox() } // what the foreground polling loop does
+
+        assertTrue("no offer, no audio, nothing about voice left the watch", link.sent.none { it is VoiceOffer })
+        assertEquals("nothing about the memos changed", before, r.memos.value)
+        assertTrue(audio("a").exists() && audio("b").exists())
+    }
+
+    @Test
+    fun `the watch has no code path that can send audio at all`() {
+        // The link cannot stream a recording, and the repository cannot create or upload one: a fact of the types, not a habit.
+        assertTrue(PhoneLink::class.java.methods.none { it.name.contains("Voice", ignoreCase = true) })
+        assertTrue(AssistantRepository::class.java.methods.none { it.name in setOf("uploadPendingMemos", "saveMemo", "canKeepAnotherMemo") })
+    }
+
+    @Test
+    fun `a transcript an earlier version's phone was still producing is kept as words to review and is never sent`() = runBlocking {
+        val r = upgradedInstall(memo("a", MemoState.TRANSCRIBING))
+        r.migrateLegacyMemos()
+        r.handleBytes(encode(TranscriptResult("req-a", "a", text = "  Is the lav on mic three ringing?  ", engine = "On-device")))
+
+        val m = r.memos.value.memos.single()
         assertEquals(MemoState.TRANSCRIPT_READY, m.state)
         assertEquals("Is the lav on mic three ringing?", m.transcript)
-        assertFalse("no audio is kept once it has been transcribed", File(repo.memoDir, "memo-1.pcm").exists())
+        assertFalse("the words replace the clip", audio("a").exists())
+        assertTrue("a late legacy result never becomes a question by itself", r.outbox.value.entries.isEmpty() && link.sentOf<AssistantRequest>().isEmpty())
     }
 
     @Test
-    fun `a failed transcription is shown, not hidden`() = runBlocking {
-        repo.saveMemo(memo(), ByteArray(1_000))
-        repo.handleBytes(encode(TranscriptResult("req-memo-1", "memo-1", error = "No on-device speech recognition is installed on this phone.")))
-        val m = repo.memos.value.memos.single()
-        assertEquals(MemoState.FAILED, m.state)
-        assertTrue(m.error!!.contains("No on-device speech recognition"))
+    fun `a late failure from the phone does not touch a recording that is still on the watch`() = runBlocking {
+        val r = upgradedInstall(memo("a", MemoState.TRANSCRIBING))
+        r.migrateLegacyMemos()
+        r.handleBytes(encode(TranscriptResult("req-a", "a", error = "No on-device speech recognition is installed on this phone.")))
+        assertEquals(MemoState.LEGACY_RECORDING, r.memos.value.memos.single().state)
+        assertTrue(audio("a").exists())
     }
 
     @Test
-    fun `uploads that keep failing end as failed after a bounded number of tries`() = runBlocking {
-        link.voiceOk = false
-        repo.saveMemo(memo(), ByteArray(1_000))
-        repeat(AssistantRepository.MAX_MEMO_ATTEMPTS) { repo.uploadPendingMemos() }
-        assertEquals(MemoState.FAILED, repo.memos.value.memos.single().state)
-        assertEquals(AssistantRepository.MAX_MEMO_ATTEMPTS, repo.memos.value.memos.single().attempts)
+    fun `a transcript already waiting for review is not overwritten by a late duplicate, and an unknown memo is ignored`() = runBlocking {
+        val r = upgradedInstall(memo("t", MemoState.TRANSCRIPT_READY).copy(transcript = "first words"))
+        r.handleBytes(encode(TranscriptResult("req-t", "t", text = "second words")))
+        r.handleBytes(encode(TranscriptResult("req-x", "x", text = "from nowhere")))
+        assertEquals("first words", r.memos.value.memos.single().transcript)
     }
 
     @Test
-    fun `a waiting recording or an unchecked transcript is never silently dropped to make room`() = runBlocking {
-        val states = listOf(MemoState.PENDING_PHONE, MemoState.UPLOADING, MemoState.TRANSCRIBING, MemoState.TRANSCRIPT_READY, MemoState.PENDING_PHONE)
-        assertEquals(AssistantRepository.MAX_MEMOS, states.size)
-        states.forEachIndexed { i, s -> repo.saveMemo(memo("m$i", s), ByteArray(10)) }
-        assertFalse("every slot holds something the person still needs", repo.canKeepAnotherMemo())
-
-        // The watch refuses to start another recording, but even if one is saved anyway nothing the person needs is lost.
-        repo.saveMemo(memo("extra"), ByteArray(10))
-        assertEquals((states.indices.map { "m$it" } + "extra").toSet(), repo.memos.value.memos.map { it.memoId }.toSet())
+    fun `deleting an older recording deletes its audio and leaves the others`() = runBlocking {
+        val r = upgradedInstall(memo("keep"), memo("victim"))
+        r.migrateLegacyMemos()
+        r.deleteMemo("victim")
+        assertFalse(audio("victim").exists())
+        assertTrue(audio("keep").exists())
+        assertEquals(listOf("keep"), r.memos.value.memos.map { it.memoId })
     }
 
     @Test
-    fun `only finished memos are dropped to stay within the limit, oldest first, and their audio goes too`() = runBlocking {
-        repeat(AssistantRepository.MAX_MEMOS) { i ->
-            repo.saveMemo(memo("m$i", if (i == 1 || i == 3) MemoState.FAILED else MemoState.PENDING_PHONE), ByteArray(10))
-        }
-        assertTrue("a failed memo can make room", repo.canKeepAnotherMemo())
-
-        repo.saveMemo(memo("new"), ByteArray(10))
-        val ids = repo.memos.value.memos.map { it.memoId }
-        assertEquals(AssistantRepository.MAX_MEMOS, ids.size)
-        assertFalse("the oldest finished memo was the one dropped", "m1" in ids)
-        assertTrue("m3" in ids && "new" in ids && "m0" in ids)
-        assertEquals("audio files of dropped memos are removed too", AssistantRepository.MAX_MEMOS, repo.memoDir.listFiles()!!.size)
-    }
-
-    @Test
-    fun `deleting a memo deletes its audio`() = runBlocking {
-        repo.saveMemo(memo("keep"), ByteArray(10))
-        repo.saveMemo(memo("victim"), ByteArray(10))
-        repo.deleteMemo("victim")
-        assertFalse(File(repo.memoDir, "victim.pcm").exists())
-        assertTrue(File(repo.memoDir, "keep.pcm").exists())
-        assertEquals(listOf("keep"), repo.memos.value.memos.map { it.memoId })
+    fun `the migration leaves the question outbox, the cache and the preferences exactly as they were`() = runBlocking {
+        repo.submit(request())
+        repo.updatePrefs { it.copy(theatreMode = false, listenSeconds = 30) }
+        val outboxBefore = repo.outbox.value
+        val prefsBefore = repo.prefs.value
+        repo.migrateLegacyMemos()
+        assertEquals(outboxBefore, repo.outbox.value)
+        assertEquals(prefsBefore, repo.prefs.value)
+        assertEquals("an old prefs.json with listenSeconds still decodes", 30, repo.prefs.value.listenSeconds)
     }
 
     @Test
@@ -648,21 +698,17 @@ class AssistantRepositoryTest {
     }
 
     @Test
-    fun `a memo whose audio went missing fails clearly`() = runBlocking {
-        repo.saveMemo(memo(), ByteArray(10))
-        File(repo.memoDir, "memo-1.pcm").delete()
-        repo.uploadPendingMemos()
-        assertEquals(MemoState.FAILED, repo.memos.value.memos.single().state)
-    }
-
-    @Test
-    fun `a memo keeps the snapshot that was taken before it was recorded, with its original time`() = runBlocking {
-        val ctx = MeasurementSnapshotBuilder.build(
-            TestMeasurements.inputs(analyzer = TestMeasurements.analyzerSample(TestMeasurements.reading()), nowEpoch = 1_800_000_000_000L, runState = RunState.RUNNING),
-        )
-        repo.saveMemo(memo().copy(snapshot = ctx), ByteArray(10))
-        val reborn = newRepo()
-        assertEquals(1_800_000_000_000L, reborn.memos.value.memos.single().snapshot!!.capturedAtEpochMs)
-        assertEquals(ctx, reborn.memos.value.memos.single().snapshot)
+    fun `a queued text question is still delivered, acknowledged and de-duplicated after the voice path was removed`() = runBlocking {
+        link.phones = emptyList()
+        repo.submit(request())
+        assertEquals(OutboxState.QUEUED_OFFLINE, state())
+        link.phones = listOf(PhoneNode("phone-1", "Pixel 10", true))
+        repo.flushOutbox()
+        assertEquals(OutboxState.SENDING, state())
+        repo.handleBytes(encode(Ack("req-1", AckStatus.RECEIVED)))
+        assertEquals(OutboxState.ACKED, state())
+        repo.handleBytes(encode(Ack("req-1", AckStatus.DUPLICATE)))
+        assertEquals("a duplicate ack changes nothing", OutboxState.ACKED, state())
+        assertEquals(1, link.sentOf<AssistantRequest>().size)
     }
 }

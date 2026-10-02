@@ -40,8 +40,8 @@ private val QUICK_TASKS = listOf(
 )
 
 /**
- * The third pager page, after ANALYZER and RING. The big microphone opens the listening screen (it never records by
- * itself); task cards start the same flow with the task preselected. This page is a scrolling list so the crown scrolls
+ * The third pager page, after ANALYZER and RING. The big microphone opens the asking screen, which opens the watch's own dictation
+ * screen (this app never records, and nothing starts until the person taps); task cards start the same flow with the task preselected. This page is a scrolling list so the crown scrolls
  * it -- it deliberately does *not* rotate the instrument like the two measurement pages do -- and it holds no fixed lower
  * action row at all, so the round-screen limit of two bottom controls can't be exceeded.
  */
@@ -61,7 +61,8 @@ fun AssistantScreen(vm: AssistantViewModel, angleDegrees: Float, nav: AssistantN
 
     val status = AssistantFormatting.pageStatus(reachable, cache.providers, mode, inFlight.firstOrNull())
     val openIssues = ledger.issues.values.count { v -> v.view().let { !it.deleted && it.isOpen } }
-    val pendingMemos = memos.memos.count { it.state != MemoState.SENT }
+    // Older recordings an earlier version made (and transcripts it produced): they only wait here to be read or deleted.
+    val olderMemos = memos.memos.count { it.state != MemoState.SENT }
     val latest = cache.threads.firstOrNull()
 
     Box(Modifier.fillMaxSize().graphicsLayer { rotationZ = angleDegrees }, contentAlignment = Alignment.Center) {
@@ -83,7 +84,7 @@ fun AssistantScreen(vm: AssistantViewModel, angleDegrees: Float, nav: AssistantN
             item { MicButton(onClick = { nav.ask(TaskKind.FREE_CHAT, SnapshotOrigin.ASSISTANT, null, null) }) }
             item {
                 Hint(
-                    if (listenState.isBusy) "Listening… tap to open" else status.text,
+                    if (listenState.isBusy) "Dictation open… tap to return" else status.text,
                     tone = when (status.severity) { StatusSeverity.OK -> Tone.NEUTRAL; StatusSeverity.NOTE -> Tone.WARN; StatusSeverity.PROBLEM -> Tone.BAD },
                     modifier = Modifier.padding(horizontal = 6.dp),
                 )
@@ -119,7 +120,7 @@ fun AssistantScreen(vm: AssistantViewModel, angleDegrees: Float, nav: AssistantN
 
             item { SectionLabel("On this watch") }
             item { ChipButton("Issue log", secondary = if (openIssues == 0) "No open issues" else "$openIssues open", onClick = nav.issues) }
-            if (pendingMemos > 0) item { ChipButton("Voice memos", secondary = "$pendingMemos waiting", onClick = nav.memos) }
+            if (olderMemos > 0) item { ChipButton("Older recordings", secondary = "$olderMemos kept from an earlier version", onClick = nav.memos) }
             item { ChipButton("Settings & setup", onClick = nav.settings) }
         }
     }

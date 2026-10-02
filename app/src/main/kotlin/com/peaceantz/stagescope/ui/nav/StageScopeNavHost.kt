@@ -97,6 +97,7 @@ fun StageScopeNavHost(
             shows = { navController.navigate(AssistantRoutes.SHOWS) },
             memos = { navController.navigate(AssistantRoutes.MEMOS) },
             reviewMemo = { navController.navigate(AssistantRoutes.listen(TaskKind.FREE_CHAT, SnapshotOrigin.ASSISTANT, memo = it)) },
+            resumeDraft = { navController.navigate(AssistantRoutes.listen(TaskKind.FREE_CHAT, SnapshotOrigin.ASSISTANT, draft = true)) },
             close = { navController.popBackStack() },
         )
     }
@@ -308,6 +309,7 @@ fun StageScopeNavHost(
                 navArgument(AssistantRoutes.ARG_MEMO) { type = NavType.StringType; nullable = true; defaultValue = null },
                 navArgument(AssistantRoutes.ARG_CONV) { type = NavType.StringType; nullable = true; defaultValue = null },
                 navArgument(AssistantRoutes.ARG_EDIT) { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument(AssistantRoutes.ARG_DRAFT) { type = NavType.StringType; nullable = true; defaultValue = null },
             ),
         ) { entry ->
             val (vm, angle) = rememberAssistantScope(container, navController, entry)
@@ -319,6 +321,7 @@ fun StageScopeNavHost(
                 memoId = args?.getString(AssistantRoutes.ARG_MEMO),
                 conversationId = args?.getString(AssistantRoutes.ARG_CONV),
                 editsActionId = args?.getString(AssistantRoutes.ARG_EDIT),
+                resumeDraft = args?.getString(AssistantRoutes.ARG_DRAFT) == "1",
                 angleDegrees = angle,
                 onClose = { navController.popBackStack() },
             )

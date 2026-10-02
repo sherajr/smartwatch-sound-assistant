@@ -154,7 +154,7 @@ This is a heuristic on spectral shape and time alone. It cannot distinguish acou
 
 When you ask the assistant a question, the watch attaches a **snapshot of what the instruments were showing the instant you tapped** (`assistant/measure/MeasurementSnapshotBuilder`, schema v1, shared type in `:shared`). It is built from the live DSP state — never a screenshot — and its rules are the measurement rules above, restated for an AI reader:
 
-- **Taken before speech, never relabelled.** `capturedAtEpochMs` is the moment of the tap. A snapshot that travels later (an offline voice memo, a question queued while the phone was away) keeps that time; the assistant is told how old it is.
+- **Taken before speech, never relabelled.** `capturedAtEpochMs` is the moment of the tap. A snapshot that travels later (an unsent dictation kept across closing the app, a question queued while the phone was away) keeps that time; the assistant is told how old it is.
 - **Raw dBFS and Estimated SPL are separate fields.** `level.rmsDbfs`, `peakDbfs`, `maxRmsDbfs`, `sessionAverageRmsDbfs` are always raw dBFS (the on-screen MAX/AVG, which carry the calibration offset, are un-offset before they go in). `calibration.estimatedSplDb` is `raw RMS + offset` and exists only when calibration applies to the current input configuration. The spectrum and the sample peak are never offset (`MeasurementSnapshotBuilderTest`).
 - **Rings are history unless recently heard.** Each ring carries `lastObservedAgoMs` (relative to the tracker's monotonic clock *at snapshot time*), how long it persisted, pinned/restored flags, and a freshness derived from observation timing: `LIVE_NOW` (heard within 0.4 s while capture runs), `RECENTLY_SEEN` (within the auto-hold window), `STALE`, or `RESTORED_NOT_REOBSERVED`. A pin only protects a slot from eviction; it is not evidence the tone is sounding. `prominenceDb` is detector contrast, passed through labelled as such.
 - **Run state is explicit:** running / paused for voice / stopped / not started / error; when not running, the notes say how many seconds old the readings are. Freeze is reported (`run.spectrumFrozen`, `spectrum.held`).
@@ -276,11 +276,13 @@ Centralized in `dsp/FrequencyBands.kt` (Rumble 20–80 Hz, Body 80–250 Hz, War
 - [ ] Assistant page, round screen: the mic button, status line, provider chip, show chip, task cards and
       the bottom of the list are all fully visible (no text cut by the bezel) at default and the largest font
       size. No screen has more than **two** round buttons in its lower row.
-- [ ] Tap the mic: the Listen screen appears and only *then* does the microphone start (check the system
-      mic indicator). Say something → you see **what it heard** before anything is sent; ● records again; ▶
-      sends. ✕ at any point sends nothing.
-- [ ] While Analyzer is measuring, ask a question: Analyzer shows **PAUSED · listening** with its last reading,
-      returns to live afterwards, Freeze (if on) is still on, Ring pins are untouched. Press **Stop** while it is
+- [ ] Tap the mic: the Listen screen appears, then the **watch's own dictation screen** opens (StageScope
+      itself never records). Say something → the words come back and you see them to **check** before anything
+      is sent; ● dictates again; ▶ sends; **Type instead** uses the watch keyboard. Backing out of the dictation
+      screen sends nothing and creates nothing. The dictation screen may use the internet and may play its own
+      sounds (StageScope can't mute those).
+- [ ] While Analyzer is measuring, ask a question: Analyzer shows **PAUSED · listening** with its last reading while the dictation
+      screen is open, returns to live afterwards, Freeze (if on) is still on, Ring pins are untouched. Press **Stop** while it is
       paused: it must stay stopped. Let the 2-minute countdown end while paused: it must stay stopped.
 - [ ] Ask with Analyzer **stopped**: measurement is not started by the question.
 - [ ] Ask about rings with a pinned ring from an earlier session and nothing sounding: the answer calls it

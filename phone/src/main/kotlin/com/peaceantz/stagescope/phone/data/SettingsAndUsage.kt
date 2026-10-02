@@ -23,7 +23,10 @@ data class KeyStatus(
     val availableModels: List<String>? = null,
 )
 
-/** Which provider (if any) transcribes watch recordings in the cloud. Off by default: it costs money. */
+/**
+ * Legacy. An earlier version could upload watch recordings to a cloud provider for transcription. That feature is gone, so this is
+ * never read and is reset to [NONE] at startup; the type stays only so an existing settings file still decodes.
+ */
 @Serializable
 enum class SpeechProviderChoice { NONE, OPENAI }
 

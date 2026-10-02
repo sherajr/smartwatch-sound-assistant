@@ -42,6 +42,8 @@ class FakeScheduler : WorkScheduler {
     override fun enqueueAssistant(requestId: String) { assistant += requestId }
     override fun cancelAssistant(requestId: String) { cancelled += requestId }
     override fun enqueueConfirm(cmd: ConfirmCommand) { confirms += cmd }
+    var legacyTranscriptionCancelled = 0
+    override fun cancelLegacyTranscription() { legacyTranscriptionCancelled++ }
 }
 
 class FakeContinuations(var outcome: ContinueOutcome = ContinueOutcome.NOTIFICATION_POSTED) : Continuations {

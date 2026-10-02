@@ -8,6 +8,7 @@ import com.peaceantz.stagescope.phone.google.CalendarClient
 import com.peaceantz.stagescope.phone.google.GmailClient
 import com.peaceantz.stagescope.phone.google.GoogleAuthorizer
 import com.peaceantz.stagescope.phone.google.TokenResult
+import com.peaceantz.stagescope.phone.link.LEGACY_VOICE_REFUSAL
 import com.peaceantz.stagescope.phone.link.PhoneMessageHandler
 import com.peaceantz.stagescope.phone.link.ThreadPublisher
 import com.peaceantz.stagescope.shared.actions.ActionEvent
@@ -37,6 +38,7 @@ import com.peaceantz.stagescope.shared.protocol.RequestState
 import com.peaceantz.stagescope.shared.protocol.StatusQuery
 import com.peaceantz.stagescope.shared.protocol.StatusReply
 import com.peaceantz.stagescope.shared.protocol.SyncNudge
+import com.peaceantz.stagescope.shared.protocol.TranscriptResult
 import com.peaceantz.stagescope.shared.protocol.VoiceOffer
 import com.peaceantz.stagescope.shared.protocol.VoicePurpose
 import com.peaceantz.stagescope.shared.protocol.Wire
@@ -61,7 +63,6 @@ class MessageHandlerTest {
     private val link = FakeWatchLink()
     private val scheduler = FakeScheduler()
     private val continuations = FakeContinuations()
-    private val voiceOffers = mutableListOf<VoiceOffer>()
     private lateinit var handler: PhoneMessageHandler
     private var now = 1_800_000_000_000L
     private var seq = 0L
@@ -80,7 +81,7 @@ class MessageHandlerTest {
         handler = PhoneMessageHandler(
             data = data, link = link, publisher = publisher, scheduler = scheduler, executor = executor, continuations = continuations,
             phoneInstallId = { "phone-install" }, appVersionName = "0.2.0", appVersionCode = 2, hasKey = { it == ProviderId.OPENAI },
-            onVoiceOffer = { voiceOffers += it }, clock = { now },
+            clock = { now },
         )
     }
 
@@ -282,11 +283,35 @@ class MessageHandlerTest {
     }
 
     @Test
-    fun `a voice offer is handed to the receiver and acknowledged as received, not transcribed`() = runBlocking {
-        val offer = VoiceOffer("r-v", "memo-1", VoicePurpose.DICTATION, 16_000, 4_000, 128_000)
-        deliver(offer)
-        assertEquals(listOf(offer), voiceOffers)
-        assertEquals(AckStatus.RECEIVED, link.sentOf<Ack>().single().status)
+    fun `a recording offered by an older watch app is refused with an explanation and starts nothing`() = runBlocking {
+        deliver(VoiceOffer("r-v", "memo-1", VoicePurpose.DICTATION, 16_000, 4_000, 128_000))
+
+        val ack = link.sentOf<Ack>().single()
+        assertEquals("r-v", ack.requestId)
+        assertEquals(AckStatus.REJECTED, ack.status)
+        assertEquals(LEGACY_VOICE_REFUSAL, ack.detail)
+        // The older watch shows this next to the recording instead of waiting for a transcript that will never come.
+        val transcript = link.sentOf<TranscriptResult>().single()
+        assertEquals("memo-1", transcript.memoId)
+        assertNull(transcript.text)
+        assertEquals(LEGACY_VOICE_REFUSAL, transcript.error)
+
+        assertTrue("no AI request, no confirmation and no transcription job", scheduler.assistant.isEmpty() && scheduler.confirms.isEmpty())
+        assertNull("it did not become a request", data.inbox.get("r-v"))
+    }
+
+    @Test
+    fun `refusing a recording leaves ordinary requests working`() = runBlocking {
+        deliver(VoiceOffer("r-v", "memo-1", VoicePurpose.DICTATION, 16_000, 4_000, 128_000))
+        deliver(Samples.request(id = "req-ok"))
+        assertEquals(listOf("req-ok"), scheduler.assistant)
+        assertTrue(link.sentOf<Ack>().any { it.requestId == "req-ok" && it.status == AckStatus.RECEIVED })
+    }
+
+    @Test
+    fun `the phone no longer advertises voice transcription`() = runBlocking {
+        deliver(hello())
+        assertTrue(link.sentOf<Hello>().single().features.none { it.contains("voice", ignoreCase = true) || it.contains("transcri", ignoreCase = true) })
     }
 
     @Test

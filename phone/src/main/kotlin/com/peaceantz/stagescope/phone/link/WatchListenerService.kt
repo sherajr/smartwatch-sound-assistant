@@ -6,17 +6,19 @@ import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.MessageEvent
+import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import com.peaceantz.stagescope.phone.PhoneApp
 import com.peaceantz.stagescope.shared.protocol.Wire
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Receives watch messages, data items and recordings. Per Wear OS guidance a listener must be quick:
  * every callback here persists the request and acknowledges it, then returns -- long work (an AI
- * request, a Gmail send, a transcription) runs in WorkManager, never in an in-memory coroutine that
+ * request, a Gmail send) runs in WorkManager, never in an in-memory coroutine that
  * would die with this service.
  */
 class WatchListenerService : WearableListenerService() {
@@ -46,11 +48,14 @@ class WatchListenerService : WearableListenerService() {
         }
     }
 
+    /**
+     * An older watch app may still open a channel to stream a recording. StageScope no longer accepts audio: the channel is closed
+     * without reading a byte, nothing is stored, and no transcription (on this phone or in a cloud service) is ever started.
+     */
     override fun onChannelOpened(channel: ChannelClient.Channel) {
-        val path = channel.path
-        if (!path.startsWith(Wire.CHANNEL_VOICE + "/")) return
-        runCatching { runBlocking(Dispatchers.IO) { container.voiceReceiver.receive(channel) } }
-            .onFailure { Log.w(TAG, "voice receive failed: ${it.javaClass.simpleName}") }
+        if (!channel.path.startsWith(Wire.CHANNEL_VOICE + "/")) return
+        runCatching { runBlocking(Dispatchers.IO) { withTimeoutOrNull(5_000) { Wearable.getChannelClient(this@WatchListenerService).close(channel).await() } } }
+        Log.i(TAG, "refused a legacy recording channel")
     }
 
     companion object {

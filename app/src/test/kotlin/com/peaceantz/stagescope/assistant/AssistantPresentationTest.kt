@@ -119,7 +119,7 @@ class AssistantPresentationTest {
         val noKey = ProvidersView(1, ProviderId.OPENAI, listOf(provider(ProviderId.OPENAI, hasKey = false)))
         val working = OutboxEntry(TestRequests.request(), OutboxState.RUNNING, 0, progress = ProgressStage.THINKING)
 
-        assertEquals(PageStatus("Listening…", StatusSeverity.OK), AssistantFormatting.pageStatus(true, ready, com.peaceantz.stagescope.audio.AudioMode.LISTENING, working))
+        assertEquals(PageStatus("Dictation open… measurement paused", StatusSeverity.NOTE), AssistantFormatting.pageStatus(true, ready, com.peaceantz.stagescope.audio.AudioMode.LISTENING, working))
         assertTrue(AssistantFormatting.pageStatus(true, ready, com.peaceantz.stagescope.audio.AudioMode.SPEAKING, null).text.contains("measurement paused"))
         assertTrue(AssistantFormatting.pageStatus(true, ready, com.peaceantz.stagescope.audio.AudioMode.PHONE_PLAYBACK, null).text.contains("Phone is speaking"))
         assertEquals(PageStatus("Thinking…", StatusSeverity.OK), AssistantFormatting.pageStatus(true, ready, com.peaceantz.stagescope.audio.AudioMode.IDLE, working))

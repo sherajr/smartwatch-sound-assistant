@@ -4,18 +4,12 @@ import com.peaceantz.stagescope.phone.data.UsageEntry
 import com.peaceantz.stagescope.phone.data.UsageGuard
 import com.peaceantz.stagescope.phone.data.UsageLimits
 import com.peaceantz.stagescope.phone.data.UsageVerdict
-import com.peaceantz.stagescope.phone.voice.TranscribeResult
-import com.peaceantz.stagescope.phone.voice.Transcriber
-import com.peaceantz.stagescope.phone.voice.TranscriberChain
-import com.peaceantz.stagescope.phone.voice.Wav
 import com.peaceantz.stagescope.shared.assistant.ProviderId
 import com.peaceantz.stagescope.shared.assistant.UsageSummary
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
@@ -91,76 +85,5 @@ class UsageGuardTest {
     fun `no budget means spend never blocks`() {
         val v = UsageGuard.check(UsageLimits(maxRequestsPerDay = 100, monthlyBudgetUsd = null), listOf(chat(at(2026, 10, 3), estimatedMicros = 999_000_000)), now, zone)
         assertEquals(UsageVerdict.Ok, v)
-    }
-}
-
-class VoiceTest {
-    @Test
-    fun `the WAV container has a correct PCM header`() {
-        val pcm = ByteArray(32_000) { (it % 7).toByte() } // 1 s of 16 kHz mono 16-bit
-        val wav = Wav.fromPcm16Mono(pcm, 16_000)
-        assertEquals(44 + pcm.size, wav.size)
-        val b = ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN)
-        assertEquals("RIFF", String(wav, 0, 4))
-        assertEquals(36 + pcm.size, b.getInt(4))
-        assertEquals("WAVE", String(wav, 8, 4))
-        assertEquals("fmt ", String(wav, 12, 4))
-        assertEquals(16, b.getInt(16))
-        assertEquals(1, b.getShort(20).toInt()) // PCM
-        assertEquals(1, b.getShort(22).toInt()) // mono
-        assertEquals(16_000, b.getInt(24))
-        assertEquals(32_000, b.getInt(28)) // byte rate
-        assertEquals(2, b.getShort(32).toInt()) // block align
-        assertEquals(16, b.getShort(34).toInt())
-        assertEquals("data", String(wav, 36, 4))
-        assertEquals(pcm.size, b.getInt(40))
-        assertEquals(pcm.toList(), wav.drop(44))
-    }
-
-    @Test
-    fun `duration is computed from bytes and sample rate`() {
-        assertEquals(1_000L, Wav.durationMs(32_000, 16_000))
-        assertEquals(2_500L, Wav.durationMs(80_000, 16_000))
-    }
-
-    private class Fixed(val result: TranscribeResult) : Transcriber {
-        var calls = 0
-        override suspend fun transcribe(pcm16: ByteArray, sampleRateHz: Int): TranscribeResult { calls++; return result }
-    }
-
-    private val pcm = ByteArray(10)
-
-    @Test
-    fun `on-device success is used and the cloud is never contacted`() = runBlocking {
-        val cloud = Fixed(TranscribeResult.Text("cloud", "Cloud", 1))
-        val r = TranscriberChain(Fixed(TranscribeResult.Text("hello", "On-device")), cloud).transcribe(pcm, 16_000)
-        assertEquals("hello", (r as TranscribeResult.Text).text)
-        assertEquals(0, cloud.calls)
-    }
-
-    @Test
-    fun `the cloud is a fallback only when it is enabled and could plausibly help`() = runBlocking {
-        val cloud = Fixed(TranscribeResult.Text("from cloud", "Cloud (x)", 4_500))
-        // Not enabled -> the on-device failure is reported as is.
-        val off = TranscriberChain(Fixed(TranscribeResult.Failure("no recognizer", cloudMayHelp = true)), null).transcribe(pcm, 16_000)
-        assertTrue(off is TranscribeResult.Failure)
-        // Enabled, but the failure isn't something the cloud would fix (no speech in the audio) -> no upload.
-        val silent = TranscriberChain(Fixed(TranscribeResult.Failure("no speech", cloudMayHelp = false)), cloud).transcribe(pcm, 16_000)
-        assertTrue(silent is TranscribeResult.Failure)
-        assertEquals(0, cloud.calls)
-        // Enabled and plausible -> used, and the cost travels with the result.
-        val used = TranscriberChain(Fixed(TranscribeResult.Failure("no recognizer", cloudMayHelp = true)), cloud).transcribe(pcm, 16_000) as TranscribeResult.Text
-        assertEquals("from cloud", used.text)
-        assertEquals(4_500L, used.costMicros)
-        assertEquals(1, cloud.calls)
-    }
-
-    @Test
-    fun `when both fail the message explains both`() = runBlocking {
-        val r = TranscriberChain(
-            Fixed(TranscribeResult.Failure("No on-device recognition.", cloudMayHelp = true)),
-            Fixed(TranscribeResult.Failure("Your OpenAI key was rejected.")),
-        ).transcribe(pcm, 16_000) as TranscribeResult.Failure
-        assertTrue(r.message.contains("No on-device recognition.") && r.message.contains("Your OpenAI key was rejected."))
     }
 }

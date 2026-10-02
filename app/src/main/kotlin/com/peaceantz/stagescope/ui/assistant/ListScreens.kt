@@ -52,6 +52,12 @@ fun TasksScreen(vm: AssistantViewModel, angleDegrees: Float, nav: AssistantNavig
             if (attention.isEmpty()) item { Hint("Nothing is waiting for you.") }
             for (a in attention) {
                 when (a) {
+                    is AttentionItem.Draft -> item(key = a.key) {
+                        ChipButton(
+                            "Unsent words", secondary = "“${a.draft.text.take(80)}” · ${AssistantFormatting.ago(a.draft.savedAtEpochMs, System.currentTimeMillis())}",
+                            onClick = nav.resumeDraft,
+                        )
+                    }
                     is AttentionItem.Action -> item(key = a.key) {
                         ChipButton(a.card.title, secondary = "${a.card.statusLine} · ${a.conversationTitle}", onClick = { nav.action(a.conversationId, a.card.actionId) })
                     }
@@ -71,7 +77,7 @@ fun TasksScreen(vm: AssistantViewModel, angleDegrees: Float, nav: AssistantNavig
                             ChipButton("Check transcript", secondary = m.transcript?.take(80), onClick = { nav.reviewMemo(m.memoId) })
                         } else {
                             // Opens the list, where a failed recording can be deleted deliberately -- a tap here never discards anything.
-                            ChipButton("Voice memo failed", secondary = m.error, onClick = nav.memos)
+                            ChipButton("Older recording problem", secondary = m.error, onClick = nav.memos)
                         }
                     }
                 }
@@ -95,7 +101,7 @@ fun IssuesScreen(vm: AssistantViewModel, angleDegrees: Float, nav: AssistantNavi
             contentPadding = PaddingValues(top = 28.dp, bottom = 28.dp, start = 16.dp, end = 16.dp),
         ) {
             item { Text("Issue log", color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.SemiBold) }
-            item { ChipButton("Log an issue", secondary = "Say what happened", onClick = { nav.ask(TaskKind.LOG_ISSUE, SnapshotOrigin.ASSISTANT, null, null) }) }
+            item { ChipButton("Log an issue", secondary = "Dictate or type what happened", onClick = { nav.ask(TaskKind.LOG_ISSUE, SnapshotOrigin.ASSISTANT, null, null) }) }
             if (views.isEmpty()) item { Hint("No issues logged yet.") }
             if (open.isNotEmpty()) item { SectionLabel("Open (${open.size})") }
             for (v in open) item(key = v.id) { IssueRow(v, cache.shows?.performances?.firstOrNull { it.id == v.performanceId }?.label) { nav.issue(v.id) } }
@@ -175,6 +181,7 @@ fun MemosScreen(vm: AssistantViewModel, angleDegrees: Float, nav: AssistantNavig
     val listState = rememberScalingLazyListState()
     val now = System.currentTimeMillis()
     // A recording is the person's own words and may be the only copy: deleting one takes two taps, and the first lapses by itself.
+    // Nothing deletes a recording except this.
     var armedId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(armedId) { if (armedId != null) { delay(CONFIRM_WINDOW_MS); armedId = null } }
     RotatedContent(angleDegrees) {
@@ -182,21 +189,24 @@ fun MemosScreen(vm: AssistantViewModel, angleDegrees: Float, nav: AssistantNavig
             modifier = Modifier.fillMaxSize(), state = listState, horizontalAlignment = Alignment.CenterHorizontally,
             contentPadding = PaddingValues(top = 28.dp, bottom = 28.dp, start = 16.dp, end = 16.dp),
         ) {
-            item { Text("Voice memos", color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.SemiBold) }
-            item { Hint("Short recordings kept only until your phone has turned them into text. No audio is kept after that.") }
-            if (memos.memos.isEmpty()) item { Hint("None waiting.") }
+            item { Text("Older recordings", color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.SemiBold) }
+            item {
+                Hint(
+                    "Made by an earlier version of StageScope. Transcribing recordings on your phone is turned off, so these are never uploaded — " +
+                        "they stay on this watch until you delete them. New questions use watch dictation.",
+                )
+            }
+            if (memos.memos.isEmpty()) item { Hint("None kept.") }
             for (m in memos.memos.sortedByDescending { it.createdAtEpochMs }) {
                 item(key = m.memoId) {
                     val label = when (m.state) {
-                        MemoState.PENDING_PHONE -> "Waiting for your phone"
-                        MemoState.UPLOADING -> "Sending to your phone…"
-                        MemoState.TRANSCRIBING -> "Your phone is transcribing…"
-                        MemoState.TRANSCRIPT_READY -> "Transcript ready — tap to check"
+                        MemoState.TRANSCRIPT_READY -> "Transcript — tap to check"
                         MemoState.FAILED -> m.error ?: "Failed"
                         MemoState.SENT -> "Sent"
+                        // The three states an older version wrote while a recording waited for the phone read the same now.
+                        MemoState.LEGACY_RECORDING, MemoState.PENDING_PHONE, MemoState.UPLOADING, MemoState.TRANSCRIBING ->
+                            "Older recording — phone transcription is off"
                     }
-                    // Being sent / transcribed right now: not deletable, unless it has been stuck so long the phone has clearly lost it.
-                    val phoneIsOnIt = (m.state == MemoState.UPLOADING || m.state == MemoState.TRANSCRIBING) && now - m.createdAtEpochMs < IN_FLIGHT_GRACE_MS
                     val armed = armedId == m.memoId
                     ChipButton(
                         label = m.transcript?.take(60) ?: "${m.durationMs / 1000} s recording",
@@ -204,7 +214,6 @@ fun MemosScreen(vm: AssistantViewModel, angleDegrees: Float, nav: AssistantNavig
                         onClick = {
                             when {
                                 m.state == MemoState.TRANSCRIPT_READY -> nav.reviewMemo(m.memoId)
-                                phoneIsOnIt -> Unit
                                 armed -> { armedId = null; vm.deleteMemo(m.memoId) }
                                 else -> armedId = m.memoId
                             }
@@ -212,10 +221,9 @@ fun MemosScreen(vm: AssistantViewModel, angleDegrees: Float, nav: AssistantNavig
                     )
                 }
             }
-            item { Hint("Tap a transcript to check, send or discard it. Tap a waiting or failed recording twice to delete it.") }
+            item { Hint("Tap a transcript to check, send or discard it. Tap a recording twice to delete it.") }
         }
     }
 }
 
 private const val CONFIRM_WINDOW_MS = 4_000L
-private const val IN_FLIGHT_GRACE_MS = 5 * 60_000L

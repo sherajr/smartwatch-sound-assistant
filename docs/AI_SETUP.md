@@ -24,7 +24,7 @@ Quick map:
 
 ## 1. What you need
 
-* A Wear OS watch (this project is built for a **Pixel Watch 5**) paired to an Android phone (a **Pixel 10**), both on a current Android/Wear OS version. The phone app needs Android 13 (API 33) or newer; the watch app runs on Wear OS 3 (API 30) or newer, but on-device speech recognition needs API 31+ (in practice Wear OS 4 or newer) — an older watch uses the record-and-let-the-phone-transcribe route.
+* A Wear OS watch (this project is built for a **Pixel Watch 5**) paired to an Android phone (a **Pixel 10**), both on a current Android/Wear OS version. The phone app needs Android 13 (API 33) or newer; the watch app runs on Wear OS 3 (API 30) or newer, and dictation uses whatever dictation screen the watch has (`RecognizerIntent`) — if there is none, the app says so and offers typing or *Continue on phone*.
 * The Wear OS / Pixel Watch app on the phone, with the watch paired and connected (the Wear Data Layer carries the messages — it is the standard Wear connection, not Bluetooth you set up yourself).
 * For **AI answers**: an API key from at least one of OpenAI, Google (Gemini), xAI (Grok) or Anthropic (Claude). *A ChatGPT / Claude / Gemini app subscription is not an API key* — API usage is a separate, pay-as-you-go account with each vendor.
 * For **sending email / adding calendar events** (optional): a Google account and a small one-time Google Cloud setup (§5). Without it, every draft can still be opened in your own email or Calendar app with the text filled in.
@@ -117,12 +117,15 @@ Things to know:
 
 ## 6. Voice
 
-* **Asking.** On the watch Assistant page tap the big microphone (or a task card, or *Ask AI about this* in Analyzer/Ring Details). Allow the microphone the first time. It listens to **one bounded utterance** (10/20/30 s, your choice), then shows **what it heard** for you to check; only **▶ Send** sends it. **●** records again.
-* **Recognition runs on the watch, on-device.** If the watch has no on-device recognizer it records a short clip and your **phone** turns it into text (on-device on the phone too). The clip is deleted once transcribed.
-* **Optional cloud transcription** (phone → **Settings → Voice & speech**): off by default. If you turn it on, a recording is uploaded to OpenAI with your own OpenAI key *only when on-device recognition fails*; the cost (~$0.0045 per audio minute, checked 2026-10-01) is added to your usage.
-* **Measurement pauses while you talk** and resumes afterwards only if it was running, the app is on screen, the microphone permission is still granted and the 2-minute keep-awake countdown hasn't ended. Pressing Stop while paused cancels the resume. Freeze, pinned rings and session data are untouched.
+* **Asking.** On the watch Assistant page tap the big microphone (or a task card, or *Ask AI about this* in Analyzer/Ring Details). StageScope saves the measurement you're looking at, pauses real-microphone measurement, and opens the **watch's own dictation screen** — the normal Wear OS one (on a Pixel Watch that is Gboard's). Speak there; it returns the words to StageScope, which shows them for you to check. Only **▶ Send** (or **✓ Log it now** for *Log an issue*) does anything with them. **●** dictates again, **Type instead** uses the watch's keyboard, **Discard** (two taps) throws them away. Backing out of the dictation screen just cancels — no question, nothing recorded.
+* **StageScope never records you and never sends audio to your phone.** It only receives the text the dictation screen returns. Your **phone** gets the reviewed text (and the measurement you attached), calls the AI provider you chose, and sends the answer back.
+* **Watch dictation may need an internet connection.** The watch's speech service may use Google's servers (over the watch's Wi-Fi, or through your phone). StageScope doesn't control that, can't promise it works offline, and can't see or change how the service handles your voice; if it fails you're offered *Try again*, *Type instead* and *Continue on phone*. The dictation screen decides itself when to stop listening and may play its own sounds that StageScope can't mute.
+* **Nothing starts the dictation except your tap.** Not opening the app, a Tile, a complication, a notification, or restoring the app after it was closed. If you close the app between speaking and sending, the words are kept as **Unsent words** (under *Needs you*) until you send or discard them; dictating again keeps the old words until a usable replacement arrives.
+* **Measurement pauses while the dictation screen is open** and resumes afterwards only if it was running, the app is on screen, the microphone permission is still granted and the 2-minute keep-awake countdown hasn't ended. Pressing Stop while paused cancels the resume. Freeze, pinned rings and session data are untouched. (If the dictation screen never reports back, measurement is *ended* after 3 minutes rather than restarted under a microphone that may still be in use.)
+* **The phone speaking blocks dictation** (the watch would hear it); try again when it stops.
 * **Speaking.** Theatre mode (the default) is silent. Replies are spoken **only** when you tap **Speak** — with a confirm step if no headphones are connected. The phone's *Speak* buttons work the same way, and the watch pauses measurement while the phone talks.
-* **Offline memos.** With no phone nearby, a recording waits on the watch (Voice memos) and is sent when the phone returns. A question you ask while the phone is out of range waits up to 3 minutes before it is treated as stale (you then choose *Send anyway* or discard).
+* **Older recordings.** Earlier versions of StageScope could record a short clip and ask the phone to turn it into text. That is **gone** (the optional OpenAI cloud transcription too). Any such recording is kept on your watch untouched under **Older recordings** and is **never uploaded**; delete it there (two taps). A transcript an earlier version already made can still be opened and checked as text. An older watch app that still offers a recording to the updated phone is told, clearly, that this is turned off.
+* **With no phone nearby** you can still dictate (or type) and review. A *Log an issue* is saved on the watch right away; any other reviewed question waits in the outbox for up to 3 minutes and is then treated as stale (you choose *Send anyway* or discard).
 
 ## 7. Keep, "Continue on phone", and notifications
 
@@ -158,15 +161,20 @@ The watch's **performance chip** can follow the phone's selection or pin a diffe
 | Gmail/Calendar *Connect* fails | Package name or **SHA-1** in the Google Cloud Android client doesn't match the installed app; you're not listed as a **test user**; APIs not enabled; consent expired. |
 | *Outcome unknown — check Gmail* | The send's result couldn't be confirmed (timeout/5xx after sending). It was **not** retried. Check your Gmail *Sent* folder, then tell StageScope what you found. |
 | Calendar event at the wrong hour | Check the review card's time, UTC offset and time zone; say the zone/AM-PM explicitly; change the production's time zone. |
-| Analyzer says *PAUSED · listening/speaking/phone* | Expected while the assistant uses the microphone/speaker; it resumes by itself (unless you pressed Stop or left the app). |
+| Analyzer says *PAUSED · listening/speaking/phone* | Expected while the dictation screen is open or the assistant/phone is speaking; it resumes by itself (unless you pressed Stop or left the app). |
+| *Didn't catch that.* | The dictation screen returned nothing usable. *Try again*, or *Type instead*. |
+| *Dictation couldn't reach its service…* | The watch's speech service needed a connection and didn't have one (watch Wi-Fi, or its link to your phone). Reconnect and *Try again*, or *Type instead* / *Continue on phone*. |
+| *Watch dictation isn't available on this watch.* | No dictation screen is installed or enabled (Wear OS speech/keyboard apps). Use *Type instead* or *Continue on phone*. |
+| *Your phone is still speaking.* | Dictation is refused while the phone speaks a reply (the watch would hear it). Wait, then try again. |
+| *Dictation didn't finish.* | The dictation screen never reported back within 3 minutes. Measurement was **ended**, not restarted; start it again if you want it. |
 
 **Logs:** `scripts\logs.ps1 -Role watch` and `scripts\logs.ps1 -Role phone`. The app logs only the *kind* of an unexpected error (an exception class name) — never keys, tokens, headers, message text or measurements.
 
 ## 10. What is stored where / how to delete it
 
 * **Phone** (`files/stagescope/`): conversations, drafts/actions, the request log, shows, the issue log, settings, a usage ledger and recent measurement snapshots (≤ 24). **Keys**: Keystore-encrypted, `noBackupFilesDir`. Nothing is in cloud backup or device transfer.
-* **Watch** (`files/assistant/`): the question outbox, a cache of the last answers/providers/shows, preferences, voice memos (audio only until transcribed) and the watch's copy of the issue log. Nothing is in cloud backup or device transfer.
-* **Leaves your devices only when you act:** your question text and (if attached) the measurement snapshot go to the **selected** provider; optionally a recording to OpenAI if you enabled cloud transcription; Gmail/Calendar calls after you confirm. There is no continuous upload.
+* **Watch** (`files/assistant/`): the question outbox, a cache of the last answers/providers/shows, preferences, the open dictation screen's context and your one unsent dictation (words only), any older recordings (kept untouched, never uploaded), and the watch's copy of the issue log. Nothing is in cloud backup or device transfer.
+* **Leaves your devices only when you act:** your question text and (if attached) the measurement snapshot go to the **selected** provider; Gmail/Calendar calls after you confirm. (The watch's own dictation service may use Google's servers to recognise your speech — that is the watch's service, not StageScope — and StageScope receives only the resulting text.) There is no continuous upload.
 * **Delete:** remove a key in the provider card; Disconnect Google in Settings → Gmail & Calendar; clear all app data in Android's app settings on either device (this erases that device's conversations, issues and keys).
 
 ## 11. Manual verification checklist (for you)
@@ -184,12 +192,20 @@ I could not run any of this without your accounts and devices. Please walk throu
 
 **Measurement context**
 - [ ] Start Analyzer, ask *"what do you see?"* — the answer refers to the readings **before** you spoke; with Freeze on it says the spectrum was held.
-- [ ] While you talk, Analyzer shows **PAUSED · listening** and returns to live afterwards; press **Stop** during the question and it must **not** restart.
+- [ ] While the dictation screen is open, Analyzer shows **PAUSED · listening** and returns to live afterwards; press **Stop** before returning and it must **not** restart.
 - [ ] With Ring pins from an earlier session and nothing sounding, ask about rings: the answer must call them saved/held/historical, **not** "currently ringing".
 - [ ] Calibrate, ask again: levels are reported as raw dBFS plus a separately labelled estimated SPL.
 
-**Speech**
-- [ ] On-device recognition works on the watch (or the recording → phone route is offered). You always see the transcript before sending.
+**Speech — watch dictation** (these need a person speaking to the watch; the app and its lifecycle were exercised with fixtures and a fake recognition screen, but not with real speech)
+- [ ] Tap the assistant mic and say *"What do these sound measurements suggest?"*: the watch's dictation screen opens, the words come back for you to check, **▶ Send** produces an answer that names the provider and model.
+- [ ] *Log an issue*: say *"Log an issue: headset six is crackling during scene two"*, check it, **✓ Log it now** — it's in the Issue log (and syncs to the phone). Undo works for 10 s.
+- [ ] Back out of the dictation screen: you land back on the Assistant page, no question and no recording is created; then dictate again and it works.
+- [ ] Start Analyzer, pin a ring, **Freeze**, dictate (or back out), come back: it's still measuring, still frozen, the pin is still there.
+- [ ] Phone switched off: dictate or type and check the words — *Log an issue* still logs locally; any other question waits as text. Switch the phone on within 3 minutes ⇒ it is sent.
+- [ ] Try with the watch connected to Wi-Fi/phone, then without. Note what the dictation screen does when it can't reach its service (it may fail, or it may work offline on your watch) — StageScope offers *Try again / Type instead / Continue on phone*.
+- [ ] If you have an older recording (the *Older recordings* chip on the Assistant page): reconnect the phone — nothing is uploaded, it stays there until you delete it (two taps).
+- [ ] In a quiet room, listen for sounds from the dictation screen itself (StageScope can't mute them). Theatre mode only silences StageScope's own speech.
+- [ ] After dictation, Analyzer should come back live within about a second (it waits for the recognizer to let go of the microphone).
 - [ ] Speak: with no headphones it asks first; measurement pauses while it talks and resumes after. Phone *Speak* pauses the watch too.
 
 **Actions** (use throw-away recipients/events!)

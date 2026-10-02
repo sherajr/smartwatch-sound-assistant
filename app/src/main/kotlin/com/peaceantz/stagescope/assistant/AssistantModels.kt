@@ -82,7 +82,10 @@ data class AssistantPrefs(
     /** Theatre mode (default ON): nothing is ever spoken or vibrated unless the person asks for it right then. */
     val theatreMode: Boolean = true,
     val hapticsEnabled: Boolean = false,
-    /** Longest a single dictation may run. Bounded so a stuck microphone can't listen on. */
+    /**
+     * Unused since dictation moved to the watch's own dictation screen (which decides when it stops). Kept only so an existing
+     * prefs.json decodes and round-trips; nothing reads or shows it.
+     */
     val listenSeconds: Int = 20,
     /** The performance this watch's questions and issue logs refer to. Null = follow the phone's selection. */
     val performanceOverrideId: String? = null,
@@ -90,18 +93,27 @@ data class AssistantPrefs(
 
 @Serializable
 enum class MemoState {
-    /** Recorded on the watch; waiting for the phone to be reachable. */
+    // PENDING_PHONE / UPLOADING / TRANSCRIBING are what an earlier version wrote while a recording waited for the phone. They stay
+    // here so an existing memos.json still decodes; AssistantRepository.migrateLegacyMemos turns them into LEGACY_RECORDING.
     PENDING_PHONE,
     UPLOADING,
     TRANSCRIBING,
+
+    /** Words made by an earlier version's phone transcription. They can still be reviewed as text. */
     TRANSCRIPT_READY,
     FAILED,
     SENT,
+
+    /**
+     * A recording an earlier version made. Phone transcription is turned off, so it is never uploaded: it stays on this watch,
+     * untouched, until the person deletes it.
+     */
+    LEGACY_RECORDING,
 }
 
 /**
- * A short recording kept on the watch (never a continuous recording): either a dictation the watch
- * couldn't transcribe itself, or a voice memo made while the phone was away. The measurement
+ * A short recording an earlier version of StageScope made (either a dictation its watch couldn't transcribe, or a voice memo made
+ * while the phone was away), or the transcript the phone made from one. **New versions never create these.** The measurement
  * [snapshot] was taken *before* the recording started and keeps its own capture time.
  */
 @Serializable

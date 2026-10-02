@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
-import android.speech.SpeechRecognizer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,7 +19,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -41,7 +39,6 @@ fun HomeScreen(container: PhoneContainer, nav: (String) -> Unit, switchTab: (Str
     val actions by container.data.actions.state.collectAsState()
     var nodes by remember { mutableStateOf<List<WatchNode>?>(null) }
     var notificationsOk by remember { mutableStateOf(container.continuations.notificationsEnabled()) }
-    var micOk by remember { mutableStateOf(androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) }
 
     val owner = LocalLifecycleOwner.current
     LaunchedEffect(owner) {
@@ -49,7 +46,6 @@ fun HomeScreen(container: PhoneContainer, nav: (String) -> Unit, switchTab: (Str
             while (true) {
                 nodes = container.watchLink.reachableWatches()
                 notificationsOk = container.continuations.notificationsEnabled()
-                micOk = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
                 delay(8_000)
             }
         }
@@ -60,7 +56,6 @@ fun HomeScreen(container: PhoneContainer, nav: (String) -> Unit, switchTab: (Str
     val hasKey = container.providers.hasKey(provider)
     val providerState = settings.keyStatus[provider]
     val needAttention = actions.actions.values.count { it.state in NEEDS_ATTENTION }
-    val onDevice = Build.VERSION.SDK_INT >= 33 && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
 
     ScreenColumn {
         if (settings.devMode) Panel { Note("Test mode is ON: answers come from a built-in fake, not a real AI, and nothing can be sent or created.", tone = Tone.WARN) }
@@ -105,8 +100,7 @@ fun HomeScreen(container: PhoneContainer, nav: (String) -> Unit, switchTab: (Str
         }
 
         Panel("Voice & notifications") {
-            StatusRow("Phone microphone", if (micOk) "Allowed (used only to transcribe watch recordings)" else "Not allowed — fine unless the watch needs the phone to transcribe", if (micOk) Tone.OK else Tone.NEUTRAL)
-            StatusRow("On-device speech recognition", if (onDevice) "Available" else "Not available on this phone", if (onDevice) Tone.OK else Tone.WARN)
+            StatusRow("Voice input", "Done on your watch with its own dictation screen — the phone doesn't record or transcribe", Tone.NEUTRAL)
             StatusRow("Notifications", if (notificationsOk) "Allowed — “Continue on phone” can alert you" else "Off — “Continue on phone” will save the item but can't alert you", if (notificationsOk) Tone.OK else Tone.WARN)
             if (!notificationsOk) {
                 Button(onClick = {

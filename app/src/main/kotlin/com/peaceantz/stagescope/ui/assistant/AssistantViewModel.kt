@@ -11,27 +11,28 @@ import com.peaceantz.stagescope.assistant.AssistantAttention
 import com.peaceantz.stagescope.assistant.AssistantFormatting
 import com.peaceantz.stagescope.assistant.AttentionItem
 import com.peaceantz.stagescope.assistant.LoggedIssue
-import com.peaceantz.stagescope.assistant.MemoState
 import com.peaceantz.stagescope.assistant.OutboxEntry
 import com.peaceantz.stagescope.assistant.OutboxState
-import com.peaceantz.stagescope.assistant.VoiceMemo
 import com.peaceantz.stagescope.assistant.measure.MeasurementSnapshotBuilder
-import com.peaceantz.stagescope.assistant.speech.ListenResult
-import com.peaceantz.stagescope.assistant.speech.RecordResult
+import com.peaceantz.stagescope.assistant.speech.DictationDraft
+import com.peaceantz.stagescope.assistant.speech.DictationPhase
+import com.peaceantz.stagescope.assistant.speech.DictationPresentation
+import com.peaceantz.stagescope.assistant.speech.DictationRequest
+import com.peaceantz.stagescope.assistant.speech.DictationRequests
+import com.peaceantz.stagescope.assistant.speech.DictationState
+import com.peaceantz.stagescope.assistant.speech.InputMethod
 import com.peaceantz.stagescope.assistant.speech.SpeakStart
-import com.peaceantz.stagescope.audio.AudioLeaseKind
 import com.peaceantz.stagescope.dsp.SystemMonotonicClock
 import com.peaceantz.stagescope.shared.actions.ActionCard
 import com.peaceantz.stagescope.shared.assistant.InputOrigin
 import com.peaceantz.stagescope.shared.assistant.ReplyMode
 import com.peaceantz.stagescope.shared.assistant.TaskKind
 import com.peaceantz.stagescope.shared.measurement.MeasurementContext
+import com.peaceantz.stagescope.shared.measurement.RunState
 import com.peaceantz.stagescope.shared.measurement.SnapshotOrigin
 import com.peaceantz.stagescope.shared.measurement.UserContext
 import com.peaceantz.stagescope.shared.protocol.ActionCommandKind
-import com.peaceantz.stagescope.shared.protocol.AssistantRequest
 import com.peaceantz.stagescope.shared.protocol.ThreadView
-import com.peaceantz.stagescope.shared.protocol.VoicePurpose
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,33 +41,60 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
 /** What the full-screen listening flow is showing. */
 sealed interface ListenUi {
     data object Idle : ListenUi
-    data object Preparing : ListenUi
-    data class Listening(val partial: String?, val usingRecorder: Boolean) : ListenUi
-    data object Transcribing : ListenUi
 
-    /** The words the assistant heard, for the person to check before anything is sent anywhere. */
+    /** The measurement is saved and the watch's input screen is being opened. */
+    data object Preparing : ListenUi
+
+    /** The watch's dictation (or text) screen is open, or has just reported back. This app's own screen is not what the person is using. */
+    data class Listening(val method: InputMethod) : ListenUi
+
+    /** The words the person gave, for them to check before anything is sent anywhere. [note] explains a replacement attempt that didn't work. */
     data class Review(
         val transcript: String,
-        val engine: String?,
+        val source: String,
         val task: TaskKind,
         val measurementNote: String,
         val canLogLocally: Boolean,
+        val note: String? = null,
+        val sending: Boolean = false,
     ) : ListenUi
 
     data class Logged(val issue: LoggedIssue, val undone: Boolean = false) : ListenUi
-    data class Notice(val message: String, val canRetry: Boolean, val needsPermission: Boolean = false) : ListenUi
 
-    val isBusy: Boolean get() = this is Preparing || this is Listening || this is Transcribing
+    /** The attempt ended without words. What can be done next is in [text]; at most two round buttons show, the rest are chips. */
+    data class Notice(val text: DictationPresentation.NoticeText, val method: InputMethod) : ListenUi
+
+    val isBusy: Boolean get() = this is Preparing || this is Listening
+}
+
+/** Pure: what the listening screen shows for a controller state. [nowMs] only feeds the "measurement taken ... ago" line. */
+fun DictationState.toListenUi(nowMs: Long): ListenUi = when (this) {
+    DictationState.Idle -> ListenUi.Idle
+    is DictationState.Active -> when (phase) {
+        DictationPhase.PREPARING, DictationPhase.AWAITING_LAUNCH, DictationPhase.LAUNCHING -> ListenUi.Preparing
+        DictationPhase.LISTENING, DictationPhase.RESOLVING -> ListenUi.Listening(method)
+    }
+    is DictationState.Review -> {
+        val snap = draft.request.snapshot
+        ListenUi.Review(
+            transcript = draft.text,
+            source = draft.source,
+            task = draft.request.task,
+            measurementNote = if (snap == null) "No measurement attached" else "Measurement attached · taken ${AssistantFormatting.ago(snap.capturedAtEpochMs, nowMs)}",
+            canLogLocally = draft.request.task == TaskKind.LOG_ISSUE,
+            note = DictationPresentation.keptNote(note),
+            sending = sending,
+        )
+    }
+    is DictationState.Failed -> ListenUi.Notice(DictationPresentation.notice(kind, method), method)
 }
 
 /**
@@ -77,29 +105,21 @@ data class ScreenNotice(val scope: String, val message: String) {
     companion object {
         const val SETUP = "setup"
         const val PROVIDERS = "providers"
+        const val LISTEN = "listen"
         fun forAction(actionId: String) = "action:$actionId"
     }
 }
 
-/** The person's pending question while the listening flow runs: its task, the snapshot taken *before* they spoke, etc. */
-private data class Pending(
-    val requestId: String,
-    val task: TaskKind,
-    val origin: SnapshotOrigin,
-    val snapshot: MeasurementContext?,
-    val conversationId: String?,
-    val editsActionId: String?,
-    val inputOrigin: InputOrigin = InputOrigin.SPEECH_WATCH,
-)
-
 /**
  * Drives the assistant page and everything reached from it. Scoped to the "main" destination like the other
- * ViewModels, so a question survives swiping between pages. It never starts a microphone on its own: listening
- * begins only from an explicit tap, takes an exclusive audio lease (pausing measurement and resuming it
- * afterwards), is bounded in time, and ends with a transcript the person reviews before anything is sent.
+ * ViewModels, so a question survives swiping between pages. It never starts a microphone or a dictation on its own: dictation
+ * begins only from an explicit tap, borrows the microphone from measurement (via [DictationController]) for just the time the
+ * watch's own dictation screen is open, and ends with words the person reviews before anything is sent. The ViewModel holds no
+ * Activity and no launcher -- the controller outlives it, and the Activity opens the system screen.
  */
 class AssistantViewModel(private val container: AppContainer) : ViewModel() {
     private val repo get() = container.assistant
+    private val dictation get() = container.dictation
 
     val prefs = repo.prefs
     val cache = repo.cache
@@ -113,8 +133,11 @@ class AssistantViewModel(private val container: AppContainer) : ViewModel() {
     val lastActionReply = repo.lastActionReply
     val continueStates = repo.continueStates
 
-    private val _listen = MutableStateFlow<ListenUi>(ListenUi.Idle)
-    val listen: StateFlow<ListenUi> = _listen.asStateFlow()
+    /** Shown in place of the dictation state for a few seconds after a local log, so Undo is there. */
+    private val _logged = MutableStateFlow<ListenUi.Logged?>(null)
+
+    val listen: StateFlow<ListenUi> = combine(dictation.state, _logged) { s, logged -> logged ?: s.toListenUi(System.currentTimeMillis()) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, dictation.state.value.toListenUi(System.currentTimeMillis()))
 
     private val _notice = MutableStateFlow<ScreenNotice?>(null)
 
@@ -122,9 +145,6 @@ class AssistantViewModel(private val container: AppContainer) : ViewModel() {
     val notice: StateFlow<ScreenNotice?> = _notice.asStateFlow()
     private var noticeJob: Job? = null
 
-    private var pending: Pending? = null
-    private var listenJob: Job? = null
-    private var discardRecording = false
     private var lastLoggedTimer: Job? = null
 
     /** Questions still on their way (not final, not waiting for a decision) -- shown as a "working" card. */
@@ -132,8 +152,12 @@ class AssistantViewModel(private val container: AppContainer) : ViewModel() {
         f.entries.filter { !it.state.isFinal && it.state != OutboxState.STALE }.sortedBy { it.createdAtEpochMs }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val attention: StateFlow<List<AttentionItem>> = combine(cache, outbox, memos) { c, o, m ->
-        AssistantAttention.build(c.threads, o.entries, m.memos)
+    /** The one unsent dictation kept across closing the app (null when there isn't one). */
+    val unsentDraft: StateFlow<DictationDraft?> = dictation.stored.map { it.draft }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), dictation.stored.value.draft)
+
+    val attention: StateFlow<List<AttentionItem>> = combine(cache, outbox, memos, unsentDraft) { c, o, m, d ->
+        AssistantAttention.build(c.threads, o.entries, m.memos, d)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val providerChip: StateFlow<String> = cache.map { AssistantFormatting.providerChip(it.providers) }
@@ -202,228 +226,124 @@ class AssistantViewModel(private val container: AppContainer) : ViewModel() {
         return if (last != null && System.currentTimeMillis() - last.createdAtEpochMs < CONVERSATION_WINDOW_MS) last.conversationId else UUID.randomUUID().toString()
     }
 
-    // ---------------------------------------------------------------------------------- listening
+    // ---------------------------------------------------------------------------------- dictation
 
     /**
-     * Starts a bounded dictation. The measurement snapshot (if [attach]) is taken first, then the microphone is borrowed
-     * from measurement for just the utterance. [conversationId] / [editsActionId] continue an existing conversation (a
-     * voice edit of a draft).
+     * Starts one dictation. The measurement snapshot (if [attach]) and the performance are captured first -- before the watch's
+     * dictation screen opens and before the microphone is borrowed -- and stay with the question until it is sent or discarded.
+     * [conversationId] / [editsActionId] continue an existing conversation (e.g. a spoken edit of a draft). Rapid taps are harmless:
+     * while a session is active this does nothing (the screen just shows what is happening).
      */
     fun startListening(
         task: TaskKind, origin: SnapshotOrigin, attach: Boolean = true,
         conversationId: String? = null, editsActionId: String? = null,
     ) {
-        if (_listen.value.isBusy) return
-        listenJob?.cancel()
+        if (dictation.state.value.isBusy) return
         // Taken before anything else happens, so what is attached is what was on screen when the person asked.
         val snapshot = if (attach) snapshotNow(origin) else null
-        pending = Pending(UUID.randomUUID().toString(), task, origin, snapshot, conversationId ?: conversationFor(task), editsActionId)
-        _listen.value = ListenUi.Preparing
-        listenJob = viewModelScope.launch { runListening() }
-    }
-
-    private sealed interface Captured {
-        data class Said(val text: String, val engine: String) : Captured
-        class Recorded(val pcm: ByteArray, val sampleRateHz: Int, val durationMs: Long) : Captured
-        data class Ended(val ui: ListenUi) : Captured
-    }
-
-    private suspend fun runListening() {
-        val p = pending ?: return
-        val input = container.speechInput
-        val maxMs = repo.prefs.value.listenSeconds.coerceIn(5, 30) * 1000L
-        if (!input.hasPermission()) {
-            _listen.value = ListenUi.Notice("Allow the microphone to ask by voice.", canRetry = true, needsPermission = true)
-            return
-        }
-        // Borrow the microphone from measurement for this utterance only (and wait until it is truly free).
-        val lease = container.audioCoordinator.acquire(AudioLeaseKind.LISTENING, ttlMs = maxMs + 20_000)
-        val captured = try {
-            captureUtterance(maxMs)
-        } finally {
-            // Released the moment the mic is no longer needed -- measurement resumes while the person reviews.
-            container.audioCoordinator.release(lease)
-        }
-        when (captured) {
-            is Captured.Said -> showReview(p, captured.text, captured.engine)
-            is Captured.Recorded -> handleRecording(p, captured)
-            is Captured.Ended -> _listen.value = captured.ui
-        }
-    }
-
-    private suspend fun captureUtterance(maxMs: Long): Captured {
-        val input = container.speechInput
-        if (input.isOnDeviceAvailable()) {
-            _listen.value = ListenUi.Listening(partial = null, usingRecorder = false)
-            val partialJob = viewModelScope.launch { input.partial.collect { t -> _listen.value = ListenUi.Listening(t, false) } }
-            val result = input.listen(maxMs, viewModelScope)
-            partialJob.cancel()
-            return when (result) {
-                is ListenResult.Text -> Captured.Said(result.text, result.engine)
-                ListenResult.NoSpeech -> Captured.Ended(ListenUi.Notice("I didn't catch that. Tap ● to try again.", canRetry = true))
-                ListenResult.Cancelled -> Captured.Ended(ListenUi.Idle)
-                ListenResult.NeedsPermission -> Captured.Ended(ListenUi.Notice("Allow the microphone to ask by voice.", canRetry = true, needsPermission = true))
-                is ListenResult.Unavailable -> recordForPhone(maxMs)
-                is ListenResult.Failed -> Captured.Ended(ListenUi.Notice(result.message, canRetry = true))
-            }
-        }
-        return recordForPhone(maxMs)
-    }
-
-    /** No on-device recognizer: record a short clip; the phone transcribes it (on-device there; cloud only if you opted in). */
-    private suspend fun recordForPhone(maxMs: Long): Captured {
-        // Never record something there is nowhere to keep: a waiting recording or an unchecked transcript is not dropped to make room.
-        if (!repo.canKeepAnotherMemo()) {
-            return Captured.Ended(ListenUi.Notice("Voice memos are full. Send or delete one under Voice memos, then try again.", canRetry = false))
-        }
-        _listen.value = ListenUi.Listening(partial = null, usingRecorder = true)
-        discardRecording = false
-        val rec = container.voiceRecorder.record(maxMs)
-        if (discardRecording) return Captured.Ended(ListenUi.Idle)
-        return when (rec) {
-            is RecordResult.Recorded -> Captured.Recorded(rec.pcm, rec.sampleRateHz, rec.durationMs)
-            RecordResult.NothingHeard -> Captured.Ended(ListenUi.Notice("I didn't hear anything. Tap ● to try again.", canRetry = true))
-            RecordResult.NeedsPermission -> Captured.Ended(ListenUi.Notice("Allow the microphone to ask by voice.", canRetry = true, needsPermission = true))
-            is RecordResult.Failed -> Captured.Ended(ListenUi.Notice(rec.message, canRetry = true))
-        }
-    }
-
-    private suspend fun handleRecording(p: Pending, rec: Captured.Recorded) {
-        val memoId = UUID.randomUUID().toString()
-        repo.saveMemo(
-            VoiceMemo(
-                memoId = memoId, requestId = p.requestId, createdAtEpochMs = System.currentTimeMillis(), durationMs = rec.durationMs,
-                sampleRateHz = rec.sampleRateHz, byteCount = rec.pcm.size.toLong(), purpose = VoicePurpose.DICTATION, taskKind = p.task,
-                state = MemoState.PENDING_PHONE, snapshot = p.snapshot, performanceId = effectivePerformanceId(),
+        dictation.begin(
+            DictationRequest(
+                sessionId = UUID.randomUUID().toString(), task = task, origin = origin, snapshot = snapshot,
+                conversationId = conversationId ?: conversationFor(task), editsActionId = editsActionId,
+                performanceId = effectivePerformanceId(), inputOrigin = InputOrigin.SPEECH_WATCH, startedAtEpochMs = System.currentTimeMillis(),
+                measurementWasRunning = container.measurementHub.runState == RunState.RUNNING,
             ),
-            rec.pcm,
         )
-        if (!repo.refreshReachability()) {
-            _listen.value = ListenUi.Notice("Saved on your watch. It will go to your phone when it's nearby — find it under Voice memos.", canRetry = false)
-            return
-        }
-        _listen.value = ListenUi.Transcribing
-        repo.uploadPendingMemos()
-        val settled = withTimeoutOrNull(TRANSCRIBE_WAIT_MS) {
-            repo.memos.first { f -> f.memos.firstOrNull { it.memoId == memoId }?.state.let { it == MemoState.TRANSCRIPT_READY || it == MemoState.FAILED } }
-        }
-        val memo = settled?.memos?.firstOrNull { it.memoId == memoId }
-        when {
-            // The memo is kept (as a transcript, no audio) until it is sent or discarded, so a transcript is never lost
-            // if the app is closed mid-review; it then shows up under Voice memos.
-            memo?.state == MemoState.TRANSCRIPT_READY && memo.transcript != null -> showReview(p, memo.transcript, memo.engine)
-            memo?.state == MemoState.FAILED -> _listen.value = ListenUi.Notice(memo.error ?: "Your phone couldn't transcribe that.", canRetry = true)
-            else -> _listen.value = ListenUi.Notice("Your phone is still working on it. It will appear under Voice memos when it's ready.", canRetry = false)
-        }
     }
 
-    private fun showReview(p: Pending, text: String, engine: String?) {
-        val snap = p.snapshot
-        val note = when {
-            snap == null -> "No measurement attached"
-            else -> "Measurement attached · taken ${AssistantFormatting.ago(snap.capturedAtEpochMs, System.currentTimeMillis())}"
-        }
-        _listen.value = ListenUi.Review(text, engine, p.task, note, canLogLocally = p.task == TaskKind.LOG_ISSUE)
-    }
+    /** The person cancelled from this app's own screen. Keeps nothing from this utterance (an earlier draft, if any, stays). */
+    fun cancelListening() = dictation.cancel()
 
-    /** The person tapped Done: use what has been heard / recorded so far. */
-    fun finishListening() {
-        container.speechInput.finish()
-        container.voiceRecorder.stop()
-    }
-
-    /** The person tapped Cancel: stop listening and keep nothing. */
-    fun cancelListening() {
-        discardRecording = true
-        container.speechInput.cancel()
-        container.voiceRecorder.stop()
-        val job = listenJob
-        val state = _listen.value
-        if (state is ListenUi.Transcribing) job?.cancel()
-        _listen.value = ListenUi.Idle
-        pending = null
-    }
-
-    /** Dismisses a notice / finished flow so the screen can close. */
+    /** Leaves the flow: cancels an active session, or just puts a finished attempt / an unsent draft away (the draft stays stored). */
     fun closeListening() {
-        if (_listen.value.isBusy) cancelListening()
-        _listen.value = ListenUi.Idle
-        pending = null
+        _logged.value = null
+        dictation.dismiss()
     }
 
-    fun redo() {
-        val p = pending ?: return
-        _listen.value = ListenUi.Idle
-        // The transcript being replaced is discarded with its memo.
-        viewModelScope.launch { repo.memos.value.memos.filter { it.requestId == p.requestId }.forEach { repo.deleteMemo(it.memoId) } }
-        startListening(p.task, p.origin, attach = p.snapshot != null, conversationId = p.conversationId, editsActionId = p.editsActionId)
+    /** Dictate again. The words under review stay until a usable replacement arrives. */
+    fun redo() { dictation.redo(InputMethod.SPEECH) }
+
+    /** "Try again" after an attempt that gave no words: the same question, the same pre-speech measurement. */
+    fun retry() { dictation.retry(InputMethod.SPEECH) }
+
+    /** Type instead of dictating -- from a failed attempt, or to replace the words under review with typed ones. */
+    fun typeInstead() {
+        if (dictation.state.value is DictationState.Review) dictation.redo(InputMethod.KEYBOARD) else dictation.retry(InputMethod.KEYBOARD)
     }
 
-    /** Opens a transcript that a voice memo produced, for review. The snapshot taken before that recording is preserved. */
-    fun reviewMemo(memoId: String) {
-        val m = memos.value.memos.firstOrNull { it.memoId == memoId } ?: return
-        val text = m.transcript ?: return
-        val p = Pending(
-            requestId = m.requestId, task = m.taskKind, origin = m.snapshot?.origin ?: SnapshotOrigin.ASSISTANT, snapshot = m.snapshot,
-            conversationId = conversationFor(m.taskKind), editsActionId = null, inputOrigin = InputOrigin.VOICE_MEMO_TRANSCRIBED,
+    /** Opens the unsent dictation kept from earlier (it survives closing the app). */
+    fun resumeDraft(): Boolean = dictation.resumeDraft()
+
+    /** Opens a transcript that an older version's phone transcription made, as text for review. The snapshot taken before that recording is preserved. */
+    fun reviewMemo(memoId: String): Boolean {
+        val m = memos.value.memos.firstOrNull { it.memoId == memoId } ?: return false
+        val text = m.transcript ?: return false
+        val request = DictationRequest(
+            sessionId = m.requestId, task = m.taskKind, origin = m.snapshot?.origin ?: SnapshotOrigin.ASSISTANT, snapshot = m.snapshot,
+            conversationId = conversationFor(m.taskKind), performanceId = m.performanceId, inputOrigin = InputOrigin.VOICE_MEMO_TRANSCRIBED,
+            startedAtEpochMs = m.createdAtEpochMs, legacyMemoId = m.memoId,
         )
-        pending = p
-        showReview(p, text, m.engine)
+        return dictation.openForReview(
+            DictationDraft(request, text, InputMethod.SPEECH, m.engine?.let { "Older recording · $it" } ?: "Older recording", System.currentTimeMillis()),
+        )
     }
 
     fun deleteMemo(memoId: String) { viewModelScope.launch { repo.deleteMemo(memoId) } }
 
-    /** Throws away the transcript under review, and the voice memo it came from (its audio is already gone). Nothing is sent. */
+    /** Throws away the words under review (and the older recording they came from, if any). Nothing is sent. */
     fun discardReview() {
-        val p = pending
-        _listen.value = ListenUi.Idle
-        pending = null
-        if (p != null) viewModelScope.launch { repo.memos.value.memos.filter { it.requestId == p.requestId }.forEach { repo.deleteMemo(it.memoId) } }
+        viewModelScope.launch { dictation.discard()?.request?.legacyMemoId?.let { repo.deleteMemo(it) } }
     }
 
-    /** Sends the reviewed words (and the pre-speech measurement) to the assistant. */
-    fun send(text: String) {
-        val p = pending ?: return
-        val clean = text.trim()
-        if (clean.isEmpty()) return
-        val request = AssistantRequest(
-            requestId = p.requestId, conversationId = p.conversationId ?: UUID.randomUUID().toString(), taskKind = p.task, userText = clean,
-            inputOrigin = p.inputOrigin, transcriptReviewed = true, replyMode = repo.prefs.value.outputMode, measurement = p.snapshot,
-            performanceId = effectivePerformanceId(), createdAtWatchEpochMs = System.currentTimeMillis(), editsActionId = p.editsActionId,
-        )
-        val memoId = repo.memos.value.memos.firstOrNull { it.requestId == p.requestId }?.memoId
+    /**
+     * Sends the reviewed words (and the pre-speech measurement) to the assistant: the person's explicit Send. The question is
+     * saved to the outbox first, so closing the app or an unreachable phone loses nothing; a second tap while it runs does nothing.
+     */
+    fun send() {
         viewModelScope.launch {
-            repo.submit(request)
-            memoId?.let { repo.deleteMemo(it) }
+            dictation.complete { d ->
+                repo.submit(DictationRequests.toAssistantRequest(d, repo.prefs.value.outputMode, System.currentTimeMillis()))
+                d.request.legacyMemoId?.let { repo.deleteMemo(it) }
+            }
         }
-        _listen.value = ListenUi.Idle
-        pending = null
     }
 
     /** Logs the issue on the watch right now -- no phone, network or AI needed -- with a read-back and Undo. */
-    fun logLocally(text: String) {
-        val clean = text.trim()
-        if (clean.isEmpty()) return
-        val shows = cache.value.shows
-        val perfId = effectivePerformanceId()
-        val prodId = shows?.performances?.firstOrNull { it.id == perfId }?.productionId ?: shows?.selectedProductionId
+    fun logLocally() {
         viewModelScope.launch {
-            val logged = container.issues.log(clean, prodId, perfId)
-            _listen.value = ListenUi.Logged(logged)
-            pending = null
-            lastLoggedTimer?.cancel()
-            lastLoggedTimer = launch {
-                delay(UNDO_WINDOW_MS)
-                if ((_listen.value as? ListenUi.Logged)?.issue?.issueId == logged.issueId) _listen.value = ListenUi.Idle
+            dictation.complete { d ->
+                val shows = cache.value.shows
+                val perfId = d.request.performanceId
+                val prodId = shows?.performances?.firstOrNull { it.id == perfId }?.productionId ?: shows?.selectedProductionId
+                val logged = container.issues.log(d.text.trim(), prodId, perfId)
+                d.request.legacyMemoId?.let { repo.deleteMemo(it) }
+                // Shown before the draft is cleared, so the screen goes straight from the review to the read-back.
+                _logged.value = ListenUi.Logged(logged)
+                lastLoggedTimer?.cancel()
+                lastLoggedTimer = viewModelScope.launch {
+                    delay(UNDO_WINDOW_MS)
+                    if (_logged.value?.issue?.issueId == logged.issueId) _logged.value = null
+                }
             }
         }
     }
 
     fun undoLogged() {
-        val logged = (_listen.value as? ListenUi.Logged)?.issue ?: return
+        val logged = _logged.value?.issue ?: return
         viewModelScope.launch {
             container.issues.undo(logged.issueId)
-            _listen.value = ListenUi.Logged(logged, undone = true)
+            _logged.value = ListenUi.Logged(logged, undone = true)
+        }
+    }
+
+    /** "Continue on phone" from a failed dictation: asks Wear OS to open StageScope there, where the question can be typed. */
+    fun continueOnPhoneToType() {
+        viewModelScope.launch {
+            val requested = container.phoneHandoff.requestOpen(null, null)
+            postNotice(
+                ScreenNotice.LISTEN,
+                if (requested) "Asked your phone to open StageScope. It may need to be unlocked." else "Couldn't reach your phone. Open StageScope there yourself.",
+            )
         }
     }
 
@@ -558,7 +478,6 @@ class AssistantViewModel(private val container: AppContainer) : ViewModel() {
     fun setOutputMode(mode: ReplyMode) { viewModelScope.launch { repo.updatePrefs { it.copy(outputMode = mode) } } }
     fun setTheatreMode(on: Boolean) { viewModelScope.launch { repo.updatePrefs { it.copy(theatreMode = on) } } }
     fun setHaptics(on: Boolean) { viewModelScope.launch { repo.updatePrefs { it.copy(hapticsEnabled = on) } } }
-    fun setListenSeconds(s: Int) { viewModelScope.launch { repo.updatePrefs { it.copy(listenSeconds = s.coerceIn(5, 30)) } } }
     fun setPerformance(id: String?) { viewModelScope.launch { repo.updatePrefs { it.copy(performanceOverrideId = id) } } }
 
     fun selectProvider(provider: com.peaceantz.stagescope.shared.assistant.ProviderId, thorough: Boolean? = null, webSearch: Boolean? = null) {
@@ -579,7 +498,6 @@ class AssistantViewModel(private val container: AppContainer) : ViewModel() {
 
     companion object {
         private const val CONVERSATION_WINDOW_MS = 10 * 60_000L
-        private const val TRANSCRIBE_WAIT_MS = 45_000L
         private const val UNDO_WINDOW_MS = 10_000L
         private const val CONTINUE_ANSWER_WAIT_MS = 10_000L
         private const val NOTICE_MS = 10_000L

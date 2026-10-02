@@ -57,7 +57,7 @@ key — the Wear Data Layer only connects two apps with the same package name *a
 | 9 | A stale queued question is never auto-sent | `OutboxPolicy` | `OutboxPolicyTest`, `AssistantRepositoryTest` |
 | 10 | Issue edits made on both devices while apart are all kept (no wall-clock "last write wins") | `IssueSync` (CRDT) | `IssueSyncTest`, `PhoneIssueSyncTest`, `WatchIssueRepositoryTest` |
 | 11 | A Keep item is never reported as added: the only honest states are "Ready on phone" and "marked done by you" | `ActionMachine`, `ActionPresentation` | `ActionMachineTest` |
-| 12 | The assistant never starts a microphone from a Tile, complication, notification or shortcut | `ShortcutRequest`, `StageScopeAskTileService` | `ShortcutRequestTest` |
+| 12 | The assistant never starts a dictation (or any microphone use) from app start, a Tile, complication, notification, restored state or shortcut; a restored screen never reopens it | `ShortcutRequest`, `StageScopeAskTileService`, `ListenScreen` (once-per-visit flag), `DictationController` | `ShortcutRequestTest`, `DictationControllerTest`, `NoRecordingRegressionTest` |
 
 ## 3. Wire protocol (watch ⇄ phone)
 
@@ -71,13 +71,13 @@ Only supported Wear Data Layer clients are used — no custom Bluetooth socket. 
 | `DataClient` | `/stagescope/v1/providers` | `ProvidersView` — which providers have a key, selected model, Google/notification readiness (**never a key**) |
 | `DataClient` | `/stagescope/v1/shows` | `WatchShowView` — production/performance *names* only (no addresses) |
 | `DataClient` | `/stagescope/v1/issues/<replicaId>/<issueId>` | one replica's `IssueState` (each device writes only its own replica path) |
-| `ChannelClient` | `/stagescope/v1/voice/<memoId>` | a short PCM recording too large for a message |
+| `ChannelClient` | `/stagescope/v1/voice/<memoId>` | **retired.** Earlier versions streamed a short recording here. Nothing opens it any more; the phone closes one unread. |
 
 Capabilities (`res/values/wear.xml`): `stagescope_watch_app`, `stagescope_phone_companion`.
 
 Messages: `Hello`, `AssistantRequest`, `Ack`, `CancelRequest`, `Progress`, `ResultReady`, `StatusQuery`/`StatusReply`,
 `ActionCommand`/`ActionReply`, `ContinueOnPhone`/`ContinueReply`, `ProviderSelect`, `PlaybackNotice`, `SyncNudge`,
-`VoiceOffer`, `TranscriptResult`.
+`VoiceOffer`, `TranscriptResult` (the last two are **retired** and kept only so old payloads still decode: the phone answers a `VoiceOffer` from an older watch app with a refused `Ack` and a failed `TranscriptResult` that says why, and keeps nothing).
 
 Rules:
 
@@ -100,7 +100,7 @@ read-modify-write; writes go to a temp file, are fsynced, then renamed over the 
 |---|---|---|
 | Phone | `stagescope/conversations.json`, `actions.json`, `inbox.json`, `shows.json`, `issues.json`, `settings.json`, `usage.json`, `measurements.json` | canonical ledger for conversations, actions, requests |
 | Phone | `noBackupFilesDir/credentials.json` | AES-256-GCM ciphertext only; excluded from backup |
-| Watch | `assistant/outbox.json`, `phone_cache.json`, `prefs.json`, `memos.json`, `issues.json`; `assistant/memos/*.pcm` | the watch keeps caches, its own offline entries, and short recordings until transcribed |
+| Watch | `assistant/outbox.json`, `phone_cache.json`, `prefs.json`, `dictation.json`, `issues.json`; legacy: `memos.json` + `assistant/memos/*.pcm` | caches, its own offline entries, the open dictation screen's context and the one unsent draft (words only), and — untouched, never uploaded — recordings an earlier version made |
 
 The phone's **request inbox** makes every watch request durable *before* it is acknowledged, then hands it to
 WorkManager (expedited, unique per request id). A `WearableListenerService` callback therefore only persists and
@@ -128,7 +128,7 @@ Built on the watch from the live DSP state the person is looking at — never a 
 
 ## 6. Audio ownership (`AudioCoordinator`)
 
-One rule in one place. A voice interaction takes a **lease** (`LISTENING`, `SPEAKING`, or `PHONE_PLAYBACK`). The first lease pauses the
+One rule in one place. A voice interaction takes a **lease** (`LISTENING` — the watch's dictation screen is open; `SPEAKING`; or `PHONE_PLAYBACK`). The first lease pauses the
 shared `CaptureSession` (`CaptureStatus.Paused`) and waits for the microphone to be truly released; when the last lease ends
 measurement resumes **only if**:
 
@@ -141,17 +141,50 @@ Otherwise the paused session is ended cleanly rather than left half-alive. A pau
 Freeze state, Ring bank and pins are untouched; Analyzer keeps showing the last reading with a "PAUSED · listening/speaking/phone" badge. A demo session never opens the
 microphone, so it is never paused. Starting measurement while the phone is speaking pauses it immediately.
 
+*Dictation lease:* it carries **no time limit** (the screen is another app's process), is bounded by `DictationController` instead, is given back at a safe point (app foreground + a short settle), and when the screen may still be open (abandonment) is released with `allowResume = false`, which *ends* the paused session rather than reopening a microphone that may be in use (§7). A `release(id, allowResume = false)` waits for the last lease, and a veto with nothing paused changes nothing.
+
 *Phone playback:* the phone announces `PlaybackNotice(STARTED)` before speaking and re-announces every 10 s; the watch lease expires 30 s after the last
 announcement, so a lost "stopped" message cannot leave measurement paused.
 
-## 7. Speech
+## 7. Voice input and speech
 
-* **Input** is push-to-talk, bounded (10/20/30 s, hard cap 30 s), one utterance, ending in a **transcript the person reviews** before anything is sent.
-* **Watch recognition is on-device only** (`SpeechRecognizer.createOnDeviceSpeechRecognizer`, API 31+). If unavailable, the watch **records** a short clip and the phone
-  transcribes it (on-device there; OpenAI cloud transcription only if the person enabled it, with its cost recorded). The audio is deleted once transcribed.
-* **Voice memos** made while the phone is away wait on the watch with a visible status; their pre-recording snapshot is kept with its original time.
-* **Output** is silent by default (theatre mode ON). Replies are spoken only when the person taps **Speak** (a confirm step if nothing private like headphones is connected),
-  or — with theatre mode OFF *and* voice replies chosen *and* the app on screen — automatically. Haptics are off by default.
+**StageScope does not record the person and does not send audio to the phone.** Voice input is the watch's own dictation screen; StageScope only receives the text it returns.
+
+### The flow
+
+1. The person taps the assistant microphone, a task card, or *Ask AI about this*. (Nothing else ever starts this: not app start, a Tile, a complication, a notification, a shortcut, or a restored screen.)
+2. The **measurement snapshot is built first**, before anything is paused or opened, along with the task, conversation, `editsActionId` and the selected performance. Together they are a `DictationRequest`; it is never re-snapshotted after speech and never re-attached to a different task.
+3. `DictationController` pauses real-microphone measurement through an `AudioCoordinator` **LISTENING lease** (waiting until the microphone is really free), stops StageScope's own speech, and **persists the request** (`dictation.json`).
+4. `DictationLauncherBinding` — built in `MainActivity.onCreate`, so its `ActivityResultLauncher` is registered before the Activity starts and again after every recreation — atomically *claims* the pending launch and opens `RecognizerIntent.ACTION_RECOGNIZE_SPEECH` (free-form; **no** `EXTRA_PREFER_OFFLINE`, **no** `EXTRA_LANGUAGE`, **no** package or component named). On a Pixel Watch 5 this resolves to Gboard's Wear input screen; whatever the person's watch has installed is used. `<queries>` in the manifest make the availability check work under Android's package visibility rules.
+5. The system screen returns text (`EXTRA_RESULTS`). **A result only ever leads to a review screen**; the first non-blank hypothesis is used, trimmed and otherwise untouched, and nothing is taken after an error code.
+6. The person checks the words and chooses: **Send** (or **Log**), **dictate again**, **Type instead** (the watch's own text-input screen, `RemoteInput`, through the same session), or **Discard** (two taps). Only Send/Log (`DictationController.complete`) does anything with the words: Send saves the `AssistantRequest` — *the same request id, task, conversation, performance and original-time snapshot* — to the durable outbox, which delivers it to the phone; the phone calls the selected provider and the answer comes back as before. Reply mode (text / voice / both) and theatre mode are unchanged. **Log issue** logs locally with Undo and needs no phone, network or AI.
+7. The lease is given back **exactly once**, at a safe point (the app in the foreground, plus a 350 ms settle so the recognizer has let go), and measurement resumes through `CaptureSession` — never `AnalyzerViewModel.start()`, so Freeze, pins and calibration are untouched — only if it was running, is still paused, the app is foreground, permission is held and the keep-awake countdown has not ended.
+
+### State machine (`DictationController`, no Android types, unit-tested)
+
+`Idle → Active(PREPARING → AWAITING_LAUNCH → LAUNCHING → LISTENING → RESOLVING) → Review → (complete) → Idle`, or `→ Failed`, or back to the kept draft. Guarantees:
+
+* **One launch per request.** `begin` is refused while a session is active; the host must `claimLaunch` (atomic) before opening the screen; rapid taps, recomposition, navigating back, recreation and a restored app cannot open a second one.
+* **Only LAUNCHING/LISTENING accept a result, once.** A duplicate, a late result after cancel or abandonment, or a result while newer words are under review is ignored and cannot overwrite them.
+* **Cancel is not "no speech".** `RESULT_CANCELED` means the person backed out; the platform cannot say why, so none is invented. `RESULT_NO_MATCH`/empty text is "Didn't catch that"; `RESULT_NETWORK_ERROR`/`SERVER_ERROR` give connection guidance; every failure offers a way forward (retry, type, or continue on phone).
+* **The lease has no short timer.** The dictation screen is another app's process; a TTL would resume measurement under a microphone that may still be in use. The controller bounds it itself (3 minutes without a result → *abandoned*) and then **ends** the paused session (`release(id, allowResume = false)`) instead of reopening the mic. A result that arrives before the app is foreground again waits (≤ 5 s) for it; if it never comes back the paused session is ended, not resumed. A caller cancelled while the microphone is being freed gives its lease back (`AudioCoordinator.acquire`).
+* **Process death.** The open screen's context is persisted before launch. After a restart within the 3-minute window the controller waits for that screen's result as if nothing happened (the Activity Result registry hands it to the new Activity) and delivers it into the saved context; an older record is discarded. Nothing is guessed, and restoring never opens a microphone or creates a request.
+* **One unsent draft** (words only) survives closing the app (`dictation.json`; surfaced as "Unsent words" in *Needs you*). Dictating again keeps it until a usable replacement arrives; backing out of, or failing, a replacement returns to it.
+* **Phone speaking.** If the phone is speaking a reply (a PHONE_PLAYBACK lease) dictation is refused rather than recording it; StageScope's own TTS is stopped first and refuses to start while a LISTENING lease is held.
+
+### What StageScope does and doesn't control
+
+* The dictation screen controls its own listening, retry buttons and end-of-speech timing; the old Done button, partial transcript and 10/20/30-second preference are gone because they never applied to it. It also **plays platform sounds** StageScope cannot mute (an audio-playback stream opens when it ends); StageScope's own theatre-mode silence is unchanged.
+* The recognizer **may use Google's servers**. The watch needs a connection (its own Wi-Fi, or the phone's) for that; offline behaviour is whatever the installed service does and is not promised. Settings says: *"Watch dictation may need an internet connection. StageScope sends the transcript to your phone for the AI response."*
+* StageScope's `RECORD_AUDIO` permission on the watch is for **measurement only**; opening the dictation screen needs none.
+
+### Older recordings (migration)
+
+Earlier versions recorded a short clip and had the phone transcribe it. That is removed: `PhoneLink` has no `sendVoice`, the foreground poll and reconnect handler no longer upload anything, and the phone has no recognizer, no uploader and no `TranscribeWorker`. On first start, `migrateLegacyMemos` turns recordings that were waiting for the phone into **`LEGACY_RECORDING`** — kept untouched (audio, pre-recording snapshot, the memo itself) and shown as "Older recordings … phone transcription is off" until the person deletes them (two taps). A transcript an earlier version already made can still be opened and reviewed as text; one still in flight is accepted as words to review and never sent by itself. A refused offer from an older watch app gets a clear message instead of silence.
+
+### Output
+
+Silent by default (theatre mode ON). Replies are spoken only when the person taps **Speak** (a confirm step if nothing private like headphones is connected), or — with theatre mode OFF *and* voice replies chosen *and* the app on screen — automatically. Haptics are off by default.
 
 ## 8. Provider layer (`:phone` → `ai/`)
 
@@ -223,15 +256,16 @@ A report is assembled from **the selected performance's logged facts and the per
 
 * Questions are queued on the watch with a visible state. On reconnect a queued question is sent automatically only while it is **≤ 3 minutes** old; older ones become *stale* (the person chooses "send anyway" or discards) and expire at 30 minutes.
 * Issue logging works with no phone, network or AI (conservative offline parser; the original words are kept verbatim).
-* Voice recordings wait for the phone with a visible status, are bounded (≤ 5 memos, ≤ 30 s each), and are deleted after transcription.
+* A question is entered as **text on the watch** (dictated, then reviewed; or typed). With no phone, a reviewed question is kept as text in the outbox and follows the rules above; dictation itself needs the watch's own recognizer, not the phone or an AI key.
+* Recordings an earlier version made are kept untouched, never uploaded, until deleted (§7).
 
 ## 14. Security and privacy model
 
 * Keys: AES-256-GCM with a non-exportable Android Keystore key; ciphertext bound to the provider (AAD); the Keystore is asked to choose the IV (a key created with randomized-encryption-required *rejects* a caller IV); a key that can no longer be decrypted is reported as such and must be re-entered. Stored in `noBackupFilesDir`; `allowBackup=false` plus data-extraction rules.
 * Nothing the app logs contains keys, tokens, headers, message text or measurements. Errors shown to people pass through `Redactor`.
 * Prompt injection is handled structurally, not by hoping the model behaves: tools cannot send or approve; user text is data; recipients are resolved from configuration; only the app UI can confirm; a confirmation is bound to the content.
-* What leaves the phone, and when: the conversation text and (if attached) the measurement snapshot go to the **selected** provider when the person asks a question; optionally a short recording to OpenAI **only** if cloud transcription was enabled. Gmail/Calendar API calls go to Google only after a confirmation. Nothing is sent continuously.
-* A watch Tile, complication, notification or shortcut can open the Assistant page but can never start a microphone.
+* What leaves the phone, and when: the conversation text and (if attached) the measurement snapshot go to the **selected** provider when the person asks a question; Gmail/Calendar API calls go to Google only after a confirmation. Nothing is sent continuously.
+* A watch Tile, complication, notification or shortcut can open the Assistant page but can never start a dictation or a microphone. The watch's dictation service may use Google's servers to recognise speech — that is the watch's own service, not StageScope — and StageScope receives only the resulting text.
 * Development mode swaps in an offline fake provider and **blocks Gmail/Calendar execution entirely**.
 
 ## 15. Limits and usage controls
@@ -252,9 +286,16 @@ usage guard; watch outbox policy (stale/expiry/same-id resend/forward-only state
 
 **Exercised on emulators (a Wear OS 6 round emulator for the watch app, an API 36 phone emulator for the phone app — no accounts, no network keys, fixture data only):**
 
-- *Watch*: every Assistant screen (home, tasks, email/calendar/Keep review, answer, listening and its nothing-heard result, transcript check, voice memos, issue log and issue detail, provider picker, show picker, setup, speak confirmation) driven by touch and read back from the UI tree; the Analyzer still measuring, and pausing then resuming around a question; every Tile/complication-style shortcut routed cold and warm; the install scripts refusing the wrong kind of device. Screenshots: `docs/screenshots/assistant/`.
+- *Watch*: every Assistant screen as of the earlier version (home, tasks, email/calendar/Keep review, answer, transcript check, older recordings, issue log and issue detail, provider picker, show picker, setup, speak confirmation) driven by touch and read back from the UI tree; the Analyzer still measuring, and pausing then resuming around a question; every Tile/complication-style shortcut routed cold and warm; the install scripts refusing the wrong kind of device. Screenshots: `docs/screenshots/assistant/`.
 - *Phone*: the app launching cleanly; a conversation answered end to end by the built-in test assistant through the real orchestrator and stores; the show library, contacts and issues forms; a dummy key encrypted by the **real Android Keystore** (so the AES-GCM "don't supply an IV" rule is now exercised on an Android runtime, not just a software key), shown masked, never found in plaintext on disk or in logcat, and removable; a zero-byte data file quarantined and replaced by defaults; "Continue on phone" links opening the conversation or scrolling to the exact card; the email/calendar/Keep/uncertain-outcome cards in their real wording, with Confirm unavailable until Gmail is connected and in test mode. Screenshots: `docs/screenshots/phone/`.
 - Looking at them found real defects that unit tests had not: a cold-start shortcut landing one page short; an error from one screen appearing on another; a Confirm that appeared to do nothing; warnings placed after the text they warn about; one-tap deletion of voice memos and issues; long answers clipped by the bezel; and on the phone, validation errors hidden below the visible part of a dialog, a "Save" that silently did nothing, and a deep link that opened the right conversation but not the right card. Each is fixed and recorded in CLAUDE.md or STATUS.md.
 
 **Not verified here (needs your account/hardware):** live provider calls (fixtures are doc-derived, not recorded from live traffic); Google consent and real Gmail/Calendar; Data Layer delivery and the `ChannelClient` voice path between a real watch and phone (the two emulators are not paired, so the watch shows its honest "phone isn't reachable" states);
-on-device speech recognition and TTS (the watch emulator has neither, so it exercises the record-and-let-the-phone-transcribe fallback); Wear remote activity; notification behaviour; Keep and Gemini on your phone; the Ask Tile rendering; the effect of a physical bezel, brightness and touch on the watch layout (see [MEASUREMENTS.md](MEASUREMENTS.md) → manual checklist).
+TTS; Wear remote activity; notification behaviour; Keep and Gemini on your phone; the Ask Tile rendering; the effect of a physical bezel, brightness and touch on the watch layout (see [MEASUREMENTS.md](MEASUREMENTS.md) → manual checklist).
+
+### Watch dictation (added later) — what was verified, and how
+
+* **Automated (JVM):** `DictationControllerTest` (state transitions with fake launch/result and fake audio/phone links: native launch with no offline recognizer, one launch per request, review before Send, the same pre-speech snapshot/task/request id on Send, no audio and no AI call before Send, cancel / empty / unavailable handler / launch exception / every recognizer error code, rapid taps, duplicate and late results, host recreation and a restart without relaunch, lease handling incl. result-before-foreground, Stop during the pause, abandonment, and cancelling while the mic is being freed), `DictationResultsTest`, `DictationSupportTest`, `AudioCoordinatorTest` (veto/`isHeld`/cancellation), `AssistantRepositoryTest` (legacy-memo migration; nothing uploads on reconnect/hello/sync/poll; the text outbox is unchanged), and **source guards** (`NoRecordingRegressionTest`, `NoTranscriptionRegressionTest`) that fail if a recognizer, recorder, voice offer or channel call reappears. The controller tests were checked by deliberately breaking six of its rules and confirming each is caught.
+* **Instrumented (`DictationLauncherBindingTest`, run on the Wear emulator with a fake recognition Activity):** the real Activity Result API end to end, cancellation, **host recreation while the screen is open** (no relaunch, result delivered), a missing handler, the `RemoteInput` result shape, and the exact intent that is sent.
+* **On the real Pixel Watch 5 (Android 17):** `RECOGNIZE_SPEECH` resolves to Gboard's `WearRemoteInputActivity` from this app's own context; tapping the assistant mic opened it; it stayed open past the launch bound; **BACK returned `RESULT_CANCELED`** and the Assistant page; with measurement running and the spectrum frozen, dictating and backing out left measurement running and the spectrum still frozen; a real `RESULT_OK` with text came back from the system screen and was handled (a question built from it was saved to the outbox and answered — someone tapped Send on the watch while this was being tested, so that part was not scripted); recordings left by an earlier version (fixtures) were migrated to *Older recordings* and **not uploaded** with the phone reachable. This pass found one real bug the JVM tests could not (a launch-timeout watchdog armed *after* the state was published, overwriting the listening watchdog because the host claims inside the publication) — now fixed and covered by a regression test that reproduces the re-entrancy.
+* **Not verified by anyone speaking:** actual spoken recognition quality, how the system screen behaves with no connection, and the listed owner checks in [AI_SETUP.md](AI_SETUP.md#11-manual-verification-checklist-for-you).
