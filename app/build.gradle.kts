@@ -54,6 +54,24 @@ kotlin {
     jvmToolchain(17)
 }
 
+// The watch's double-pinch gesture (tap tempo) is reached through the Wear SDK's GestureInputManager, a system library
+// on Wear OS 7+ watches (declared optional in AndroidManifest.xml). Its compile-time stub ships with SDK platform 37
+// only; this app still compiles against API 36. The usual route, Wear Compose 1.7's Modifier.oneHandedGesture, needs
+// AGP 9.1 + compileSdk 37 (its AAR metadata says so), which would move the whole toolchain for one feature -- so the
+// stub is a compileOnly dependency instead (never packaged; the watch provides the real classes). Install it with:
+//   sdkmanager "platforms;android-37.0"
+val wearSdkStub = androidComponents.sdkComponents.sdkDirectory.map {
+    it.file("platforms/android-37.0/optional/wear-sdk.jar")
+}
+tasks.named("preBuild") {
+    doFirst {
+        check(wearSdkStub.get().asFile.isFile) {
+            "Missing ${wearSdkStub.get().asFile} -- install SDK Platform 37.0: sdkmanager \"platforms;android-37.0\" " +
+                "(compile-time stub for the double-pinch gesture; compileSdk stays 36)."
+        }
+    }
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.03.01")
     implementation(composeBom)
@@ -108,6 +126,8 @@ dependencies {
     // The watch's own text-input screen (RemoteInput) for "Type instead". 1.2.0 is the stable release (the alpha-only note this
     // project once carried is out of date); dictation itself needs no library -- it is a plain RecognizerIntent.
     implementation("androidx.wear:wear-input:1.2.0")
+    // Double pinch (tap tempo) -- see wearSdkStub above.
+    compileOnly(files(wearSdkStub))
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")

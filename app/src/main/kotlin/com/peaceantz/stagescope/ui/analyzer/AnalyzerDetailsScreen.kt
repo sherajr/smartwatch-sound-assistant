@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -23,6 +24,7 @@ fun AnalyzerDetailsScreen(
     container: AppContainer,
     viewModel: AnalyzerViewModel,
     orientationViewModel: OrientationViewModel,
+    tapTempoViewModel: TapTempoViewModel,
     onOpenCalibration: () -> Unit,
     onOpenSnapshots: () -> Unit,
     onOpenAppearance: () -> Unit,
@@ -33,6 +35,8 @@ fun AnalyzerDetailsScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val settings by settingsViewModel.settings.collectAsStateWithLifecycle()
     val orientationLocked by orientationViewModel.locked.collectAsStateWithLifecycle()
+    val tempo by tapTempoViewModel.state.collectAsStateWithLifecycle()
+    val pinchAvailable = remember(container) { container.primaryGesture.isAvailable() }
     val listState = rememberScalingLazyListState()
 
     ScalingLazyColumn(
@@ -46,6 +50,22 @@ fun AnalyzerDetailsScreen(
         item { DetailButton(onClick = onAskAi, modifier = Modifier.fillMaxWidth()) { Text("Ask AI about this") } }
         item { DetailButton(onClick = viewModel::reset, modifier = Modifier.fillMaxWidth()) { Text("Reset") } }
         item { DetailButton(onClick = viewModel::clearPeakHold, modifier = Modifier.fillMaxWidth()) { Text("Clear peak hold") } }
+
+        item { Text("Tap tempo", color = MaterialTheme.colorScheme.onBackground) }
+        item { TapTempoPad(state = tempo, onTap = tapTempoViewModel::tap) }
+        item {
+            Text(
+                if (pinchAvailable) {
+                    "Or double-pinch on the Analyzer page while it's measuring; the tempo shows by the clock."
+                } else {
+                    "No double pinch on this watch (or it's off in settings), so tap here."
+                },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (tempo.estimate != null) {
+            item { DetailButton(onClick = tapTempoViewModel::clear, modifier = Modifier.fillMaxWidth()) { Text("Clear tempo") } }
+        }
 
         val reading = (state as? AnalyzerUiState.Measuring)?.reading
         if (reading != null) {

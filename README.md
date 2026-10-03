@@ -17,6 +17,11 @@ doubles as the link to that page's Details/Actions screen (tap "ANALYZER ›" / 
   exact selected band, never a different one. Start/Stop is the primary action; Freeze/Resume holds
   the spectrum only (the center level and Ring detection keep running — a "SPECTRUM HELD" tag makes
   that explicit) — peak hold, saved snapshots, and snapshot comparison live in Details.
+  **Tap tempo:** while Analyzer is measuring, double-pinch (thumb and index finger, twice) on each beat — on watches with
+  Wear OS's hand gestures (Pixel Watch 3 and newer, Wear OS 7). The tempo appears next to the clock ("10:42 · 120 BPM") and
+  lights up briefly on each beat it counts; "-- BPM" there means a double pinch will count. A missed pinch is bridged and a
+  stray one ignored, so one slip doesn't wreck the reading. Analyzer Details → Tap tempo shows it to a decimal with ms/beat,
+  has a touch pad for watches without the gesture (or with it switched off), and Clear.
 - **Ring** — a five-slot bank of confirmed persistent tones, shown as five tiles at once (LIVE /
   HELD / SAVE), each independently pinnable — tap a populated tile to pin it (its fill switches to
   the theme's held accent) or tap again to unpin it; pinning one never unpins another. "Clear
@@ -85,7 +90,7 @@ Nothing to install by hand for local builds — `scripts\setup-doctor.ps1` check
 scripts\setup-doctor.ps1
 ```
 
-It reports what's missing. (This project intentionally keeps the SDK/JDK out of the repo and out of `PATH`/global settings — `local.properties`, which points Gradle at the SDK, is gitignored and machine-specific.)
+It reports what's missing. One piece the original setup didn't have: **SDK Platform 37.0** (`sdkmanager "platforms;android-37.0"`) — only its Wear SDK stub is used, to compile the double-pinch gesture; the app still targets and compiles against API 36. (This project intentionally keeps the SDK/JDK out of the repo and out of `PATH`/global settings — `local.properties`, which points Gradle at the SDK, is gitignored and machine-specific.)
 
 ## Build, test, lint
 

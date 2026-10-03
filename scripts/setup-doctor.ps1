@@ -25,6 +25,8 @@ try {
     Write-Check "Android SDK" $true $sdkRoot
     Write-Check "  platform-tools" (Test-Path "$sdkRoot\platform-tools\adb.exe")
     Write-Check "  platform android-36" (Test-Path "$sdkRoot\platforms\android-36")
+    # Only its Wear SDK stub is used (compileOnly, for the double-pinch tap tempo); compileSdk stays 36.
+    Write-Check "  platform android-37.0 (Wear SDK stub)" (Test-Path "$sdkRoot\platforms\android-37.0\optional\wear-sdk.jar") 'sdkmanager "platforms;android-37.0"'
     Write-Check "  build-tools 36.0.0" (Test-Path "$sdkRoot\build-tools\36.0.0")
 } catch {
     Write-Check "Android SDK" $false "not found under `$env:LOCALAPPDATA\Android\Sdk and ANDROID_HOME is unset"

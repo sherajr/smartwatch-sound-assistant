@@ -180,6 +180,27 @@ Centralized in `dsp/FrequencyBands.kt` (Rumble 20–80 Hz, Body 80–250 Hz, War
 
 `demo/DemoSignalGenerator` produces a fixed function of elapsed time (two steady tones plus a tone that fades in/out every 20s) — deterministic, not random, and never touches the microphone. Every screen and saved snapshot/capture is labeled DEMO when active, and demo-mode readings/captures are never written to `SurfaceSummaryRepository` (the Tile/complication never show synthetic data as if it were real).
 
+## Tap tempo (`dsp/TapTempo.kt`, Analyzer page + Details)
+
+Not a measurement of the room: it's the person's own beat, entered by a double pinch (Analyzer page, while measuring, on
+watches with Wear OS 7's hand gestures) or by the touch pad in Analyzer Details. Nothing here touches the microphone.
+
+- **Timing:** each beat is timed at the gesture's own event time when the system's stamp reads as `uptimeMillis` (the
+  watch's gesture service logs `uptimeMillis=` for every gesture), otherwise at arrival (`input/PrimaryGestureTiming`);
+  touch beats at the finger's touch-*down*. A constant recognition latency shifts every beat equally and cancels out of
+  the tempo; only its *jitter* matters.
+- **Estimate:** a least-squares fit of tap time against whole-beat position over up to the last 16 taps — not an average
+  of intervals, so every tap's timing counts, not only the first and last. With ±40 ms of jitter on every beat over 16
+  taps at 120 BPM the fit reads 120.08 (first-to-last averaging of the same taps: 119.68; `TapTempoTest`).
+- **Robustness to the recognizer:** a two-beat gap is a missed beat (bridged — no tap is invented), a tap off the beat
+  grid is skipped, two consistent new intervals mean the tempo really changed, a pause over 2 s (or 2.3 beats at slow
+  tempos) starts a new run while the last tempo stays on screen, and a second report within 150 ms is dropped as a
+  duplicate. Range 30–400 BPM.
+- **Limits:** a double pinch takes time to make, and the system's recognizer — not StageScope — decides what counts as
+  one and how quickly two can follow each other; at fast tempos it may not keep up (tap on every other beat and halve
+  it, or use the touch pad). Three taps where the second is a phantom are genuinely indistinguishable from a tempo twice
+  as fast; the fourth tap settles it. The gesture is delivered only while StageScope is in front with the screen on.
+
 ## Manual test checklist (run on a real watch; mark "not run" if unavailable)
 
 - [ ] Fresh install → app opens on ANALYZER, "Ready" state, single Start button, "ANALYZER ›" title.
@@ -267,6 +288,12 @@ Centralized in `dsp/FrequencyBands.kt` (Rumble 20–80 Hz, Body 80–250 Hz, War
 - [ ] With calibration active, confirm the level meter uses the Estimated-SPL range (Analyzer
       Details → "Level meter range") and is never pinned at 100% by a positive SPL number the way a
       -90..0 dBFS scale would misread it.
+- [ ] Tap tempo, real wrist: Analyzer → Start → the clock reads "… · -- BPM". Double-pinch along to a
+      click track (try 90, 120 and 160 BPM): each counted pinch flashes the label; after ~8 pinches it
+      reads within 1 BPM. Skip one beat on purpose → the reading holds. Stop → the last tempo stays; no
+      "-- BPM" while stopped; Ring/Assistant pages show the plain clock. Note how fast the recognizer can
+      keep up. Analyzer Details → Tap tempo: decimal BPM, ms/beat and tap count; the touch pad and Clear
+      work; scrolling the list by dragging across the pad does not count a beat.
 
 ### Assistant (phone-backed) — added with the AI assistant
 

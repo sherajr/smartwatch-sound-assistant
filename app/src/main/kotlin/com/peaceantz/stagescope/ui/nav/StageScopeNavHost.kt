@@ -18,6 +18,9 @@ import com.peaceantz.stagescope.ui.analyzer.AnalyzerDetailsScreen
 import com.peaceantz.stagescope.ui.analyzer.AnalyzerScreen
 import com.peaceantz.stagescope.ui.analyzer.AnalyzerViewModel
 import com.peaceantz.stagescope.ui.analyzer.SnapshotManagerScreen
+import com.peaceantz.stagescope.ui.analyzer.TapTempoGestureEffect
+import com.peaceantz.stagescope.ui.analyzer.TapTempoTimeText
+import com.peaceantz.stagescope.ui.analyzer.TapTempoViewModel
 import com.peaceantz.stagescope.ui.components.RotatedContent
 import com.peaceantz.stagescope.ui.components.rememberAudioPermissionRequester
 import com.peaceantz.stagescope.ui.help.WatchShortcutsHelpScreen
@@ -130,6 +133,9 @@ fun StageScopeNavHost(
             val assistantViewModel: AssistantViewModel = viewModel(viewModelStoreOwner = backStackEntry) {
                 AssistantViewModel(container)
             }
+            val tapTempoViewModel: TapTempoViewModel = viewModel(viewModelStoreOwner = backStackEntry) {
+                TapTempoViewModel()
+            }
             val angleDegrees by orientationViewModel.angleDegrees.collectAsStateWithLifecycle()
             val orientationLocked by orientationViewModel.locked.collectAsStateWithLifecycle()
 
@@ -137,14 +143,27 @@ fun StageScopeNavHost(
                 .getStateFlow<String?>(KEY_COMPARE_SNAPSHOT_ID, null)
                 .collectAsStateWithLifecycle()
 
-            AppScaffold {
-                // A cold launch from a Tile/complication/notification starts the pager ON the requested page
-                // instead of composing page 0 and jumping. Confirmed on a Wear OS 6 emulator: a jump made in
-                // the first frames loses a race with Wear's hierarchical focus -- the page *before* the target
-                // is composed right after it, takes focus, and its focusable() animates the pager back to it,
-                // so "Ask AI" landed on Ring and "Ring" on Analyzer. (rememberPagerState only reads initialPage
-                // when it first creates the state, so a page restored after rotation/process death still wins.)
-                val pagerState = rememberPagerState(initialPage = currentPendingAction.value?.page ?: ModePage.ANALYZER) { ModePage.COUNT }
+            // A cold launch from a Tile/complication/notification starts the pager ON the requested page
+            // instead of composing page 0 and jumping. Confirmed on a Wear OS 6 emulator: a jump made in
+            // the first frames loses a race with Wear's hierarchical focus -- the page *before* the target
+            // is composed right after it, takes focus, and its focusable() animates the pager back to it,
+            // so "Ask AI" landed on Ring and "Ring" on Analyzer. (rememberPagerState only reads initialPage
+            // when it first creates the state, so a page restored after rotation/process death still wins.)
+            // Created above AppScaffold so the time text can show the Analyzer's tempo on that page only.
+            val pagerState = rememberPagerState(initialPage = currentPendingAction.value?.page ?: ModePage.ANALYZER) { ModePage.COUNT }
+
+            AppScaffold(
+                timeText = {
+                    TapTempoTimeText(tempo = tapTempoViewModel, isAnalyzerPage = pagerState.currentPage == ModePage.ANALYZER)
+                },
+            ) {
+                // A double pinch taps the tempo while the Analyzer page is showing and measuring.
+                TapTempoGestureEffect(
+                    gestures = container.primaryGesture,
+                    analyzer = analyzerViewModel,
+                    tempo = tapTempoViewModel,
+                    isAnalyzerPage = pagerState.currentPage == ModePage.ANALYZER,
+                )
 
                 // Applies a Tile/complication tap (page switch, optional Measure-start, optional
                 // ring capture selection) to this already-alive session exactly once per delivery
@@ -207,12 +226,16 @@ fun StageScopeNavHost(
             val orientationViewModel: OrientationViewModel = viewModel(viewModelStoreOwner = mainEntry) {
                 OrientationViewModel(container)
             }
+            val tapTempoViewModel: TapTempoViewModel = viewModel(viewModelStoreOwner = mainEntry) {
+                TapTempoViewModel()
+            }
             val angleDegrees by orientationViewModel.angleDegrees.collectAsStateWithLifecycle()
             RotatedContent(angleDegrees) {
                 AnalyzerDetailsScreen(
                     container = container,
                     viewModel = analyzerViewModel,
                     orientationViewModel = orientationViewModel,
+                    tapTempoViewModel = tapTempoViewModel,
                     onOpenCalibration = { navController.navigate(ROUTE_CALIBRATION) },
                     onOpenSnapshots = { navController.navigate(ROUTE_SNAPSHOTS) },
                     onOpenAppearance = { navController.navigate(ROUTE_APPEARANCE) },
